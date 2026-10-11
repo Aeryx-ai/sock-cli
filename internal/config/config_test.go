@@ -85,6 +85,7 @@ func TestValidation(t *testing.T) {
 		{"plain http remote", "http://x.example", tok, "https"},
 		{"http loopback ok", "http://127.0.0.1:9", tok, ""},
 		{"http localhost ok", "http://localhost:9", tok, ""},
+		{"http LOCALHOST ok", "http://LocalHost:9", tok, ""},
 		{"garbage url", "::::", tok, "URL"},
 	}
 	for _, c := range cases {
@@ -133,5 +134,25 @@ func TestDefaultPath(t *testing.T) {
 	p, err = DefaultPath(env(map[string]string{"HOME": "/home/u"}))
 	if err != nil || p != "/home/u/.config/sock/config.toml" {
 		t.Fatalf("got %q, %v", p, err)
+	}
+}
+
+func TestTokenWhitespaceTrimmed(t *testing.T) {
+	p := writeFile(t, 0o600, "token = \" sock_pt_file\\n\"\n")
+	cases := map[string]Sources{
+		"flag": {FlagURL: "https://x.example", FlagToken: " " + tok + "\n", Getenv: env(nil)},
+		"env":  {Getenv: env(map[string]string{"SOCK_URL": "https://x.example", "SOCK_TOKEN": tok + "\r\n"})},
+		"file": {Getenv: env(map[string]string{"SOCK_URL": "https://x.example"}), Path: p},
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := Load(src)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if strings.TrimSpace(got.Token) != got.Token || !strings.HasPrefix(got.Token, "sock_pt_") {
+				t.Fatalf("token %q not trimmed", got.Token)
+			}
+		})
 	}
 }

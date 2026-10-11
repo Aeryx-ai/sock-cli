@@ -66,6 +66,8 @@ func Load(s Sources) (Config, error) {
 	if s.FlagToken != "" {
 		c.Token = s.FlagToken
 	}
+	// A trailing newline from a secret file or `$(cat ...)` is not part of the token.
+	c.Token = strings.TrimSpace(c.Token)
 	if err := validate(c); err != nil {
 		return Config{}, err
 	}
@@ -133,7 +135,7 @@ func validate(c Config) error {
 }
 
 func isLoopback(host string) bool {
-	if host == "localhost" {
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)
