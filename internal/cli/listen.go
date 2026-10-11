@@ -136,9 +136,10 @@ func (l *listener) once(ctx context.Context) (bool, error) {
 		watchdog.Stop()
 		received = true
 		if m := stream.Msg().GetMessage(); m != nil {
-			if err := l.handle(ctx, m); err != nil {
-				// One bad message never stops the stream; it stays pending and
-				// comes back on the next connection.
+			// One bad message never stops the stream; it stays pending and
+			// comes back on the next connection. After Ctrl-C the failure is
+			// just the cancel, so say nothing.
+			if err := l.handle(ctx, m); err != nil && ctx.Err() == nil {
 				l.logf("message %s: %v", m.GetId(), err)
 			}
 		}

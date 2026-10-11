@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -354,7 +355,8 @@ func listenUntil(t *testing.T, app *App, done func() bool, args ...string) (stri
 		}
 	}
 	cancel()
-	return out.String(), errOut.String(), <-result
+	err := <-result // wait for listen to exit before reading its output
+	return out.String(), errOut.String(), err
 }
 
 type syncBuffer struct {
@@ -599,6 +601,30 @@ func TestListenExecAcksOnlyOnSuccess(t *testing.T) {
 	defer mu.Unlock()
 	if len(seen) != 2 || !strings.Contains(seen[1], "SOCK_MESSAGE_ID=m-ok") || !strings.Contains(seen[1], "SOCK_CONVERSATION_ID=c-1") || !strings.Contains(seen[1], "|handle-it|") {
 		t.Fatalf("exec calls %v", seen)
+	}
+}
+
+// Ctrl-C while a handler runs makes the ack fail with a canceled context.
+// That is a clean exit, not something to report.
+func TestListenCtrlCDuringHandlerLogsNothing(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{{
+		Events: []*sockv1.SubscribeResponse{socktest.Event(socktest.Text("m-1", "c-1", 1, "hi"))},
+		Hold:   true,
+	}}
+	app := testApp(t, srv)
+	var started atomic.Bool
+	app.RunExec = func(ctx context.Context, _ string, _ []byte, _ []string, _, _ io.Writer) error {
+		started.Store(true)
+		<-ctx.Done()
+		return nil // handler finished; only the ack sees the cancel
+	}
+	_, errOut, err := listenUntil(t, app, started.Load, "--exec", "handle-it")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if errOut != "" {
+		t.Fatalf("stderr %q, want nothing on Ctrl-C", errOut)
 	}
 }
 
