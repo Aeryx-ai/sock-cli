@@ -1,0 +1,73 @@
+package cli
+
+import (
+	"context"
+
+	"connectrpc.com/connect"
+	"github.com/spf13/cobra"
+
+	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
+
+	"github.com/guygrigsby/sock-cli/internal/client"
+)
+
+// fetchBatch is the FetchPending limit per call (spec allows 1 to 500).
+const fetchBatch = 100
+
+func newFetchCmd(app *App) *cobra.Command {
+	var noAck bool
+	cmd := &cobra.Command{
+		Use:   "fetch",
+		Short: "Print pending messages and acknowledge them",
+		Long:  "Print every pending message, acknowledging each batch after it is printed. With --no-ack, print one batch and leave it pending.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c, err := app.clients()
+			if err != nil {
+				return err
+			}
+			p := app.printer()
+			for {
+				msgs, err := call(cmd.Context(), app, func(ctx context.Context) ([]*sockv1.Message, error) {
+					res, err := c.Messaging.FetchPending(ctx, connect.NewRequest(&sockv1.FetchPendingRequest{Limit: fetchBatch}))
+					if err != nil {
+						return nil, err
+					}
+					return res.Msg.GetMessages(), nil
+				})
+				if err != nil {
+					return err
+				}
+				if len(msgs) == 0 {
+					return nil
+				}
+				ids := make([]string, 0, len(msgs))
+				for _, m := range msgs {
+					if err := p.Message(cmd.OutOrStdout(), m); err != nil {
+						return err
+					}
+					ids = append(ids, m.GetId())
+				}
+				if noAck {
+					// Unacked messages come back on the next fetch; looping would
+					// print the same batch forever.
+					return nil
+				}
+				if err := ack(cmd.Context(), app, c, ids); err != nil {
+					return err
+				}
+			}
+		},
+	}
+	cmd.Flags().BoolVar(&noAck, "no-ack", false, "print one batch and leave it pending")
+	return cmd
+}
+
+// ack acknowledges ids, retrying transient failures. Acks are idempotent.
+func ack(ctx context.Context, app *App, c client.Clients, ids []string) error {
+	_, err := call(ctx, app, func(ctx context.Context) (struct{}, error) {
+		_, err := c.Messaging.Ack(ctx, connect.NewRequest(&sockv1.AckRequest{MessageIds: ids}))
+		return struct{}{}, err
+	})
+	return err
+}

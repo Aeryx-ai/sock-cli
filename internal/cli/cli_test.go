@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -235,5 +236,80 @@ func TestSendRetriesWithSameKeyOnHTTPDateRetryAfter(t *testing.T) {
 	sent, _, _, _ := srv.Snapshot()
 	if len(sent) != 2 || sent[0].IdempotencyKey != sent[1].IdempotencyKey {
 		t.Fatalf("want 2 attempts on one key, got %+v", sent)
+	}
+}
+
+func TestFetchDrainsAndAcks(t *testing.T) {
+	srv := socktest.New(t)
+	for i := range 150 {
+		srv.Pending = append(srv.Pending, socktest.Text(fmt.Sprintf("m-%d", i), "c-1", int64(i+1), "hello"))
+	}
+	out, _, err := run(t, testApp(t, srv), nil, "fetch")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if n := strings.Count(out, "\n"); n != 150 {
+		t.Fatalf("printed %d lines, want 150", n)
+	}
+	_, acked, _, _ := srv.Snapshot()
+	if len(acked) != 150 {
+		t.Fatalf("acked %d, want 150", len(acked))
+	}
+}
+
+func TestFetchNoAckPrintsOneBatchAndLeavesPending(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Pending = []*sockv1.Message{socktest.Text("m-1", "c-1", 1, "a"), socktest.Text("m-2", "c-1", 2, "b")}
+	out, _, err := run(t, testApp(t, srv), nil, "fetch", "--no-ack")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if strings.Count(out, "\n") != 2 {
+		t.Fatalf("output %q", out)
+	}
+	_, acked, _, _ := srv.Snapshot()
+	if len(acked) != 0 {
+		t.Fatalf("acked %v with --no-ack", acked)
+	}
+}
+
+func TestFetchEmpty(t *testing.T) {
+	srv := socktest.New(t)
+	out, _, err := run(t, testApp(t, srv), nil, "fetch")
+	if err != nil || out != "" {
+		t.Fatalf("out %q err %v", out, err)
+	}
+}
+
+func TestFetchJSONLines(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Pending = []*sockv1.Message{socktest.Text("m-1", "c-1", 1, "multi\nline")}
+	out, _, err := run(t, testApp(t, srv), nil, "--json", "fetch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("a multi-line message must stay one JSON line: %q", out)
+	}
+	var m sockv1.Message
+	if err := protojson.Unmarshal([]byte(lines[0]), &m); err != nil || m.GetText() != "multi\nline" {
+		t.Fatalf("decode %q: %v", lines[0], err)
+	}
+}
+
+func TestConversations(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Conversations = []*sockv1.Conversation{
+		{Id: "c-1", Kind: sockv1.ConversationKind_CONVERSATION_KIND_DIRECT, MemberIds: []string{"human-1", "puppet-1"}},
+		{Id: "c-2", Kind: sockv1.ConversationKind_CONVERSATION_KIND_GROUP, MemberIds: []string{"human-1", "human-2", "puppet-1"}},
+	}
+	out, _, err := run(t, testApp(t, srv), nil, "conversations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "c-1  direct  members human-1,puppet-1\nc-2  group  members human-1,human-2,puppet-1\n"
+	if out != want {
+		t.Fatalf("got %q, want %q", out, want)
 	}
 }
