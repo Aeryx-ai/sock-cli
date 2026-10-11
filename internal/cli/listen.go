@@ -88,11 +88,15 @@ func (l *listener) Run(ctx context.Context) error {
 			backoff = reconnectBase
 		}
 		reason := "stream closed"
+		wait := backoff
 		if err != nil {
 			reason = client.Describe(err).Error()
+			if ra, ok := client.RetryAfter(err, time.Now()); ok {
+				wait = min(max(wait, ra), reconnectMax)
+			}
 		}
-		l.logf("%s; reconnecting in %s", reason, backoff)
-		if l.app.Sleep(ctx, backoff) != nil {
+		l.logf("%s; reconnecting in %s", reason, wait)
+		if l.app.Sleep(ctx, wait) != nil {
 			return nil
 		}
 		backoff = min(backoff*2, reconnectMax)

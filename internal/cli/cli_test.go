@@ -504,6 +504,25 @@ func TestListenHeartbeatsKeepStreamAlive(t *testing.T) {
 	}
 }
 
+func TestListenReconnectHonorsRetryAfter(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{
+		{End: socktest.RateLimited("5")},
+		{End: socktest.RateLimited("600")}, // above reconnectMax
+		{End: socktest.RateLimited("0")},   // below the backoff
+	}
+	app := testApp(t, srv)
+	waits := recordSleeps(&app.Sleep)
+	_, _, err := listenUntil(t, app, func() bool { return subscribes(srv) >= 4 })
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	want := []time.Duration{5 * time.Second, time.Minute, 4 * time.Second}
+	if w := waits(); !slices.Equal(w, want) {
+		t.Fatalf("waits %v, want %v", w, want)
+	}
+}
+
 func TestListenStopsOnBadToken(t *testing.T) {
 	srv := socktest.New(t)
 	app := testApp(t, srv)
