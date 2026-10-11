@@ -153,9 +153,16 @@ func TestSendToConversationFromStdin(t *testing.T) {
 func TestSendRetriesWithSameKey(t *testing.T) {
 	srv := socktest.New(t)
 	srv.SendErrs = []error{socktest.Unavailable(), socktest.RateLimited("1")}
-	_, _, err := run(t, testApp(t, srv), nil, "send", "hi")
+	app := testApp(t, srv)
+	app.Retrier.Base = 2 * time.Second // so the computed backoff cannot pass for Retry-After
+	waits := recordSleeps(&app.Retrier.Sleep)
+	_, _, err := run(t, app, nil, "send", "hi")
 	if err != nil {
 		t.Fatalf("send: %v", err)
+	}
+	// Backoff for Unavailable, then the server's Retry-After of 1s.
+	if w := waits(); !slices.Equal(w, []time.Duration{2 * time.Second, time.Second}) {
+		t.Fatalf("waits %v, want [2s 1s]", w)
 	}
 	sent, _, _, _ := srv.Snapshot()
 	if len(sent) != 3 {
@@ -234,9 +241,16 @@ func TestSendExactlyMaxBytesAllowed(t *testing.T) {
 
 func TestSendRetriesWithSameKeyOnHTTPDateRetryAfter(t *testing.T) {
 	srv := socktest.New(t)
-	srv.SendErrs = []error{socktest.RateLimited(time.Now().Add(2 * time.Second).UTC().Format(http.TimeFormat))}
-	if _, _, err := run(t, testApp(t, srv), nil, "send", "hi"); err != nil {
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	srv.SendErrs = []error{socktest.RateLimited(now.Add(2 * time.Second).Format(http.TimeFormat))}
+	app := testApp(t, srv)
+	app.Retrier.Now = func() time.Time { return now }
+	waits := recordSleeps(&app.Retrier.Sleep)
+	if _, _, err := run(t, app, nil, "send", "hi"); err != nil {
 		t.Fatalf("send: %v", err)
+	}
+	if w := waits(); len(w) != 1 || w[0] < time.Second || w[0] > 2*time.Second {
+		t.Fatalf("waits %v, want one wait between 1s and 2s", w)
 	}
 	sent, _, _, _ := srv.Snapshot()
 	if len(sent) != 2 || sent[0].IdempotencyKey != sent[1].IdempotencyKey {
