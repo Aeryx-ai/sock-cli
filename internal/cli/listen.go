@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -19,7 +20,17 @@ import (
 const (
 	reconnectBase = time.Second
 	reconnectMax  = time.Minute
+	// heartbeatInterval is how often the server sends a heartbeat on an
+	// idle stream (sock.v1 Subscribe contract).
+	heartbeatInterval = 30 * time.Second
+	// defaultListenIdle tolerates one missed heartbeat.
+	defaultListenIdle = 2 * heartbeatInterval
 )
+
+// errStreamIdle marks a stream that went silent past the idle limit,
+// typically a half-open connection. It is not a Connect error, so listen
+// reconnects after it.
+var errStreamIdle = errors.New("no message or heartbeat")
 
 func newListenCmd(app *App) *cobra.Command {
 	var execCmd string
@@ -34,7 +45,11 @@ func newListenCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			l := &listener{app: app, clients: c, printer: app.printer(), exec: execCmd, out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr()}
+			idle := app.ListenIdle
+			if idle <= 0 {
+				idle = defaultListenIdle
+			}
+			l := &listener{app: app, clients: c, printer: app.printer(), exec: execCmd, idle: idle, out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr()}
 			return l.Run(cmd.Context())
 		},
 	}
@@ -47,6 +62,7 @@ type listener struct {
 	clients client.Clients
 	printer Printer
 	exec    string
+	idle    time.Duration
 	out     io.Writer
 	errOut  io.Writer
 }
@@ -83,28 +99,47 @@ func (l *listener) Run(ctx context.Context) error {
 }
 
 // once holds one Subscribe stream. It reports whether any message arrived.
+// A watchdog cancels the stream after l.idle with nothing received, so a
+// half-open connection cannot hang listen forever. Handlers run on ctx, not
+// the stream's context, so a slow --exec is never cut off by the watchdog.
 func (l *listener) once(ctx context.Context) (bool, error) {
-	stream, err := l.clients.Messaging.Subscribe(ctx, connect.NewRequest(&sockv1.SubscribeRequest{}))
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var idled atomic.Bool
+	watchdog := time.AfterFunc(l.idle, func() {
+		idled.Store(true)
+		cancel()
+	})
+	defer watchdog.Stop()
+	idleErr := func() error { return fmt.Errorf("%w in %s", errStreamIdle, l.idle) }
+
+	stream, err := l.clients.Messaging.Subscribe(sctx, connect.NewRequest(&sockv1.SubscribeRequest{}))
 	if err != nil {
+		if idled.Load() {
+			return false, idleErr()
+		}
 		return false, err
 	}
 	defer func() {
-		if err := stream.Close(); err != nil && ctx.Err() == nil {
+		if err := stream.Close(); err != nil && sctx.Err() == nil {
 			l.logf("close stream: %v", err)
 		}
 	}()
 	delivered := false
 	for stream.Receive() {
-		m := stream.Msg().GetMessage()
-		if m == nil {
-			continue // heartbeat
+		watchdog.Stop()
+		if m := stream.Msg().GetMessage(); m != nil {
+			delivered = true
+			if err := l.handle(ctx, m); err != nil {
+				// One bad message never stops the stream; it stays pending and
+				// comes back on the next connection.
+				l.logf("message %s: %v", m.GetId(), err)
+			}
 		}
-		delivered = true
-		if err := l.handle(ctx, m); err != nil {
-			// One bad message never stops the stream; it stays pending and
-			// comes back on the next connection.
-			l.logf("message %s: %v", m.GetId(), err)
-		}
+		watchdog.Reset(l.idle)
+	}
+	if idled.Load() {
+		return delivered, idleErr()
 	}
 	return delivered, stream.Err()
 }

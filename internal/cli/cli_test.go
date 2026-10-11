@@ -440,6 +440,41 @@ func TestListenReconnectsAfterServerDrop(t *testing.T) {
 	}
 }
 
+func subscribes(srv *socktest.Server) int {
+	_, _, _, n := srv.Snapshot()
+	return n
+}
+
+// A half-open connection delivers nothing and never errors; the watchdog
+// must notice the silence and reconnect.
+func TestListenReconnectsWhenStreamGoesSilent(t *testing.T) {
+	srv := socktest.New(t) // no scripts: every Subscribe holds silently
+	app := testApp(t, srv)
+	app.ListenIdle = 50 * time.Millisecond
+	_, errOut, err := listenUntil(t, app, func() bool { return subscribes(srv) >= 2 })
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if !strings.Contains(errOut, "no message or heartbeat in 50ms") {
+		t.Fatalf("stderr %q", errOut)
+	}
+}
+
+func TestListenHeartbeatsKeepStreamAlive(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{{Hold: true, HeartbeatEvery: 20 * time.Millisecond}}
+	app := testApp(t, srv)
+	app.ListenIdle = 200 * time.Millisecond
+	start := time.Now()
+	_, errOut, err := listenUntil(t, app, func() bool { return time.Since(start) > 700*time.Millisecond })
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if n := subscribes(srv); n != 1 {
+		t.Fatalf("subscribes %d, want 1; stderr %q", n, errOut)
+	}
+}
+
 func TestListenStopsOnBadToken(t *testing.T) {
 	srv := socktest.New(t)
 	app := testApp(t, srv)

@@ -32,11 +32,13 @@ type Sent struct {
 
 // StreamScript is what one Subscribe connection does: send Events in order,
 // then end with End (nil means a clean close). If Hold is true the stream
-// stays open after Events until the client goes away.
+// stays open after Events until the client goes away, sending a heartbeat
+// every HeartbeatEvery when that is set.
 type StreamScript struct {
-	Events []*sockv1.SubscribeResponse
-	End    error
-	Hold   bool
+	Events         []*sockv1.SubscribeResponse
+	End            error
+	Hold           bool
+	HeartbeatEvery time.Duration
 }
 
 // Server is the fake. Set fields before the client calls; read them after.
@@ -237,8 +239,22 @@ func (s *Server) Subscribe(ctx context.Context, _ *connect.Request[sockv1.Subscr
 		}
 	}
 	if script.Hold {
-		<-ctx.Done()
-		return nil
+		var tick <-chan time.Time
+		if script.HeartbeatEvery > 0 {
+			t := time.NewTicker(script.HeartbeatEvery)
+			defer t.Stop()
+			tick = t.C
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-tick:
+				if err := stream.Send(Heartbeat()); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return script.End
 }

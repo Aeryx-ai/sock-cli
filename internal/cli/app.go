@@ -27,6 +27,10 @@ type App struct {
 	Retrier    client.Retrier
 	// Sleep is used between listen reconnects.
 	Sleep func(context.Context, time.Duration) error
+	// ListenIdle is how long listen waits with no message or heartbeat
+	// before it treats the stream as dead and reconnects. Zero means
+	// defaultListenIdle.
+	ListenIdle time.Duration
 	// RunExec runs a listen --exec command with the message on stdin.
 	RunExec func(ctx context.Context, cmdline string, stdin []byte, env []string, stdout, stderr io.Writer) error
 
