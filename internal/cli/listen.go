@@ -76,14 +76,15 @@ func (l *listener) logf(format string, args ...any) {
 func (l *listener) Run(ctx context.Context) error {
 	backoff := reconnectBase
 	for {
-		delivered, err := l.once(ctx)
+		received, err := l.once(ctx)
 		if ctx.Err() != nil {
 			return nil
 		}
 		if err != nil && !reconnectable(err) {
 			return client.Describe(err)
 		}
-		if delivered {
+		if received {
+			// The connection worked; the next failure is a fresh one.
 			backoff = reconnectBase
 		}
 		reason := "stream closed"
@@ -98,7 +99,8 @@ func (l *listener) Run(ctx context.Context) error {
 	}
 }
 
-// once holds one Subscribe stream. It reports whether any message arrived.
+// once holds one Subscribe stream. It reports whether anything (a message
+// or a heartbeat) arrived.
 // A watchdog cancels the stream after l.idle with nothing received, so a
 // half-open connection cannot hang listen forever. Handlers run on ctx, not
 // the stream's context, so a slow --exec is never cut off by the watchdog.
@@ -125,11 +127,11 @@ func (l *listener) once(ctx context.Context) (bool, error) {
 			l.logf("close stream: %v", err)
 		}
 	}()
-	delivered := false
+	received := false
 	for stream.Receive() {
 		watchdog.Stop()
+		received = true
 		if m := stream.Msg().GetMessage(); m != nil {
-			delivered = true
 			if err := l.handle(ctx, m); err != nil {
 				// One bad message never stops the stream; it stays pending and
 				// comes back on the next connection.
@@ -139,9 +141,9 @@ func (l *listener) once(ctx context.Context) (bool, error) {
 		watchdog.Reset(l.idle)
 	}
 	if idled.Load() {
-		return delivered, idleErr()
+		return received, idleErr()
 	}
-	return delivered, stream.Err()
+	return received, stream.Err()
 }
 
 func (l *listener) handle(ctx context.Context, m *sockv1.Message) error {

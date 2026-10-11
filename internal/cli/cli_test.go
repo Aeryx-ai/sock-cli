@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -408,14 +409,7 @@ func TestListenReconnectsAfterServerDrop(t *testing.T) {
 		{Events: []*sockv1.SubscribeResponse{socktest.Event(socktest.Text("m-2", "c-1", 2, "after"))}, Hold: true},
 	}
 	app := testApp(t, srv)
-	var waits []time.Duration
-	var mu sync.Mutex
-	app.Sleep = func(_ context.Context, d time.Duration) error {
-		mu.Lock()
-		defer mu.Unlock()
-		waits = append(waits, d)
-		return nil
-	}
+	waits := recordSleeps(&app.Sleep)
 	acked := ackedCount(srv)
 	out, errOut, err := listenUntil(t, app, func() bool { return acked() == 2 })
 	if err != nil {
@@ -431,12 +425,47 @@ func TestListenReconnectsAfterServerDrop(t *testing.T) {
 	if subs != 3 {
 		t.Fatalf("subscribes %d, want 3", subs)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	// First stream delivered a message: backoff resets to 1s. Second
-	// delivered nothing: next wait doubles.
-	if len(waits) != 2 || waits[0] != time.Second || waits[1] != 2*time.Second {
-		t.Fatalf("waits %v", waits)
+	// First stream received a message: backoff resets to 1s. Second
+	// received nothing: next wait doubles.
+	if w := waits(); len(w) != 2 || w[0] != time.Second || w[1] != 2*time.Second {
+		t.Fatalf("waits %v", w)
+	}
+}
+
+// recordSleeps replaces *sleep with a no-op that records each duration and
+// returns a reader for them.
+func recordSleeps(sleep *func(context.Context, time.Duration) error) func() []time.Duration {
+	var mu sync.Mutex
+	var waits []time.Duration
+	*sleep = func(_ context.Context, d time.Duration) error {
+		mu.Lock()
+		defer mu.Unlock()
+		waits = append(waits, d)
+		return nil
+	}
+	return func() []time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(waits)
+	}
+}
+
+// A connection that received only heartbeats was healthy; the next failure
+// starts the backoff over.
+func TestListenHeartbeatResetsBackoff(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{
+		{Events: []*sockv1.SubscribeResponse{socktest.Heartbeat()}, End: socktest.Unavailable()},
+		{Events: []*sockv1.SubscribeResponse{socktest.Heartbeat()}, End: socktest.Unavailable()},
+	}
+	app := testApp(t, srv)
+	waits := recordSleeps(&app.Sleep)
+	_, _, err := listenUntil(t, app, func() bool { return subscribes(srv) >= 3 })
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if w := waits(); len(w) != 2 || w[0] != time.Second || w[1] != time.Second {
+		t.Fatalf("waits %v, want [1s 1s]", w)
 	}
 }
 
