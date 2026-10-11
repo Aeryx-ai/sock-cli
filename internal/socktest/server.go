@@ -56,6 +56,9 @@ type Server struct {
 	// Streams are consumed, front first, one per Subscribe call. With none
 	// left, Subscribe holds the stream open until the client cancels.
 	Streams []StreamScript
+	// KeepAcked leaves acked messages pending, like a server whose acks
+	// silently do nothing.
+	KeepAcked bool
 	// Subscribes counts Subscribe calls.
 	Subscribes int
 
@@ -208,6 +211,9 @@ func (s *Server) Ack(_ context.Context, req *connect.Request[sockv1.AckRequest])
 	defer s.mu.Unlock()
 	for _, id := range req.Msg.GetMessageIds() {
 		s.Acked = append(s.Acked, id)
+		if s.KeepAcked {
+			continue
+		}
 		s.Pending = slices.DeleteFunc(s.Pending, func(m *sockv1.Message) bool { return m.GetId() == id })
 	}
 	return connect.NewResponse(&sockv1.AckResponse{}), nil

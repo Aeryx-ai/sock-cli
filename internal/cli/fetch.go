@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"slices"
 
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
@@ -27,6 +29,9 @@ func newFetchCmd(app *App) *cobra.Command {
 				return err
 			}
 			p := app.printer()
+			// A batch of only ids already printed means acks are not draining
+			// the queue; stop rather than print the same messages forever.
+			seen := map[string]bool{}
 			for {
 				msgs, err := call(cmd.Context(), app, func(ctx context.Context) ([]*sockv1.Message, error) {
 					res, err := c.Messaging.FetchPending(ctx, connect.NewRequest(&sockv1.FetchPendingRequest{Limit: fetchBatch}))
@@ -41,12 +46,16 @@ func newFetchCmd(app *App) *cobra.Command {
 				if len(msgs) == 0 {
 					return nil
 				}
+				if !slices.ContainsFunc(msgs, func(m *sockv1.Message) bool { return !seen[m.GetId()] }) {
+					return errors.New("the server returned messages already printed and acknowledged; stopping")
+				}
 				ids := make([]string, 0, len(msgs))
 				for _, m := range msgs {
 					if err := p.Message(cmd.OutOrStdout(), m); err != nil {
 						return err
 					}
 					ids = append(ids, m.GetId())
+					seen[m.GetId()] = true
 				}
 				if noAck {
 					// Unacked messages come back on the next fetch; looping would

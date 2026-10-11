@@ -260,6 +260,19 @@ func TestFetchDrainsAndAcks(t *testing.T) {
 	}
 }
 
+func TestFetchStopsWhenAckedMessagesComeBack(t *testing.T) {
+	srv := socktest.New(t)
+	srv.KeepAcked = true
+	srv.Pending = []*sockv1.Message{socktest.Text("m-1", "c-1", 1, "a"), socktest.Text("m-2", "c-1", 2, "b")}
+	out, _, err := run(t, testApp(t, srv), nil, "fetch")
+	if err == nil || !strings.Contains(err.Error(), "already printed") {
+		t.Fatalf("want a no-progress error, got %v", err)
+	}
+	if strings.Count(out, "\n") != 2 {
+		t.Fatalf("output %q", out)
+	}
+}
+
 func TestFetchNoAckPrintsOneBatchAndLeavesPending(t *testing.T) {
 	srv := socktest.New(t)
 	srv.Pending = []*sockv1.Message{socktest.Text("m-1", "c-1", 1, "a"), socktest.Text("m-2", "c-1", 2, "b")}
