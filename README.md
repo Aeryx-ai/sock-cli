@@ -16,7 +16,7 @@ Or put `url` and `token` in `~/.config/sock/config.toml`:
 
 Precedence, highest first: `--url` and `--token` flags, `SOCK_URL` and `SOCK_TOKEN`, config file. A flag shows in `ps`, so prefer the env vars.
 
-The config path is `$XDG_CONFIG_HOME/sock/config.toml` when `XDG_CONFIG_HOME` is set. A config file that holds a token must be mode 0600 (`chmod 600`); `sock` refuses to run if group or others can read it. A missing file is fine.
+The config path is `$XDG_CONFIG_HOME/sock/config.toml` when `XDG_CONFIG_HOME` is set. A config file that holds a token must not be readable by group or others (`chmod 600`); `sock` refuses to run otherwise. A missing file is fine.
 
 ## Use
 
@@ -40,8 +40,10 @@ Global flags: `--url`, `--token`, `--json` (JSON lines instead of text). `send` 
 - `SOCK_CONVERSATION_ID`
 - `SOCK_SENDER_ID`
 
+The command inherits the rest of the environment, including `SOCK_TOKEN` when set, so it can reply with `sock send`.
+
 Exit 0 acks the message. Any other exit leaves it unacked and `listen` keeps going with the next one. The unacked message is not retried on the same connection: it is redelivered after the stream reconnects. Delivery is at-least-once, so make the command idempotent and key on `SOCK_MESSAGE_ID`.
 
-`listen` reconnects on stream failure with exponential backoff from 1s to 1m.
+`listen` reconnects on stream failure with exponential backoff from 1s to 1m, waiting at least the server's `Retry-After`. A stream silent for 60s (two missed heartbeats) counts as failed. A rejected token or a wrong URL exits instead.
 
 MIT licensed.
