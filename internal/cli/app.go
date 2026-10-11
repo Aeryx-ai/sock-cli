@@ -1,16 +1,97 @@
 // Package cli defines the sock command tree.
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"bytes"
+	"context"
+	"io"
+	"os"
+	"os/exec"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/guygrigsby/sock-cli/internal/client"
+	"github.com/guygrigsby/sock-cli/internal/config"
+)
+
+// unaryTimeout bounds each unary call; Subscribe has no deadline.
+const unaryTimeout = 30 * time.Second
 
 // App holds everything commands depend on, so tests can substitute any of it.
 type App struct {
-	Version string
+	Version    string
+	Getenv     func(string) string
+	ConfigPath string
+	StdinIsTTY func() bool
+	Retrier    client.Retrier
+	// Sleep is used between listen reconnects.
+	Sleep func(context.Context, time.Duration) error
+	// RunExec runs a listen --exec command with the message on stdin.
+	RunExec func(ctx context.Context, cmdline string, stdin []byte, env []string, stdout, stderr io.Writer) error
+
+	flagURL   string
+	flagToken string
+	jsonOut   bool
 }
 
 // DefaultApp wires the real environment.
 func DefaultApp(version string) *App {
-	return &App{Version: version}
+	path, err := config.DefaultPath(os.Getenv)
+	if err != nil {
+		path = "" // no HOME: env and flags still work
+	}
+	return &App{
+		Version:    version,
+		Getenv:     os.Getenv,
+		ConfigPath: path,
+		StdinIsTTY: func() bool {
+			fi, err := os.Stdin.Stat()
+			return err == nil && fi.Mode()&os.ModeCharDevice != 0
+		},
+		Retrier: client.DefaultRetrier(),
+		Sleep:   client.SleepCtx,
+		RunExec: runShell,
+	}
+}
+
+// runShell runs cmdline with /bin/sh -c.
+func runShell(ctx context.Context, cmdline string, stdin []byte, env []string, stdout, stderr io.Writer) error {
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", cmdline)
+	cmd.Stdin = bytes.NewReader(stdin)
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	return cmd.Run()
+}
+
+func (a *App) clients() (client.Clients, error) {
+	cfg, err := config.Load(config.Sources{
+		FlagURL:   a.flagURL,
+		FlagToken: a.flagToken,
+		Getenv:    a.Getenv,
+		Path:      a.ConfigPath,
+	})
+	if err != nil {
+		return client.Clients{}, err
+	}
+	return client.New(cfg, a.Version), nil
+}
+
+func (a *App) printer() Printer { return Printer{JSON: a.jsonOut} }
+
+// call runs one unary RPC with retries on transient failures, a per-attempt
+// timeout, and errors rewritten into actionable text.
+func call[T any](ctx context.Context, a *App, fn func(context.Context) (T, error)) (T, error) {
+	var out T
+	err := a.Retrier.Do(ctx, func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(ctx, unaryTimeout)
+		defer cancel()
+		var err error
+		out, err = fn(ctx)
+		return err
+	})
+	return out, client.Describe(err)
 }
 
 // NewRoot builds the command tree.
@@ -22,5 +103,10 @@ func NewRoot(app *App) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	pf := root.PersistentFlags()
+	pf.StringVar(&app.flagURL, "url", "", "server URL (default $SOCK_URL)")
+	pf.StringVar(&app.flagToken, "token", "", "bearer token (default $SOCK_TOKEN; a flag is visible in ps, prefer the env var)")
+	pf.BoolVar(&app.jsonOut, "json", false, "print as JSON lines")
+	root.AddCommand(newWhoamiCmd(app), newSendCmd(app))
 	return root
 }
