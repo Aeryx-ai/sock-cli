@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"time"
@@ -27,6 +28,9 @@ type App struct {
 	Retrier    client.Retrier
 	// Sleep is used between listen reconnects.
 	Sleep func(context.Context, time.Duration) error
+	// Jitter spreads a reconnect backoff so many clients do not retry in
+	// lockstep. It must return a value in [0, d]. Nil means no jitter.
+	Jitter func(d time.Duration) time.Duration
 	// ListenIdle is how long listen waits with no message or heartbeat
 	// before it treats the stream as dead and reconnects. Zero means
 	// defaultListenIdle.
@@ -55,8 +59,16 @@ func DefaultApp(version string) *App {
 		},
 		Retrier: client.DefaultRetrier(),
 		Sleep:   client.SleepCtx,
+		Jitter:  equalJitter,
 		RunExec: runShell,
 	}
+}
+
+// equalJitter returns a random duration in [d/2, d]: half the backoff is
+// kept so a reconnect never degenerates into an immediate retry.
+func equalJitter(d time.Duration) time.Duration {
+	half := d / 2
+	return half + rand.N(d-half+1)
 }
 
 // runShell runs cmdline with /bin/sh -c.

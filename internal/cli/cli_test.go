@@ -485,6 +485,37 @@ func TestListenHeartbeatResetsBackoff(t *testing.T) {
 	}
 }
 
+// Jitter shortens the backoff only; the cap and Retry-After still bound the
+// final wait.
+func TestListenAppliesJitterToBackoff(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{
+		{End: socktest.Unavailable()},
+		{End: socktest.Unavailable()},
+		{End: socktest.RateLimited("10")},
+	}
+	app := testApp(t, srv)
+	app.Jitter = func(d time.Duration) time.Duration { return d / 2 }
+	waits := recordSleeps(&app.Sleep)
+	_, _, err := listenUntil(t, app, func() bool { return subscribes(srv) >= 4 })
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	want := []time.Duration{500 * time.Millisecond, time.Second, 10 * time.Second}
+	if w := waits(); !slices.Equal(w, want) {
+		t.Fatalf("waits %v, want %v", w, want)
+	}
+}
+
+func TestEqualJitterBounds(t *testing.T) {
+	for range 1000 {
+		d := equalJitter(time.Minute)
+		if d < 30*time.Second || d > time.Minute {
+			t.Fatalf("equalJitter(1m) = %v, want [30s, 1m]", d)
+		}
+	}
+}
+
 func subscribes(srv *socktest.Server) int {
 	_, _, _, n := srv.Snapshot()
 	return n

@@ -89,6 +89,9 @@ func (l *listener) Run(ctx context.Context) error {
 		}
 		reason := "stream closed"
 		wait := backoff
+		if l.app.Jitter != nil {
+			wait = l.app.Jitter(backoff)
+		}
 		if err != nil {
 			reason = client.Describe(err).Error()
 			if ra, ok := client.RetryAfter(err, time.Now()); ok {
