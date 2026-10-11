@@ -103,9 +103,20 @@ func validate(c Config) error {
 	if !strings.HasPrefix(c.Token, "sock_pt_") && !strings.HasPrefix(c.Token, "sock_st_") {
 		return errors.New("token must start with sock_pt_ or sock_st_")
 	}
+	// Error text never echoes the raw URL: it may carry credentials.
 	u, err := url.Parse(c.URL)
-	if err != nil || u.Host == "" {
-		return fmt.Errorf("server URL %q is not a valid URL", c.URL)
+	if err != nil {
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err // url.Error repeats the input; keep only the reason
+		}
+		return fmt.Errorf("server URL is not a valid URL: %w", err)
+	}
+	if u.User != nil {
+		return errors.New("server URL must not contain a user or password; put the token in SOCK_TOKEN")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("server URL %q is not a valid URL", u.Redacted())
 	}
 	switch u.Scheme {
 	case "https":
@@ -115,7 +126,7 @@ func validate(c Config) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("server URL %q must use https (http only for loopback)", c.URL)
+	return fmt.Errorf("server URL %q must use https (http only for loopback)", u.Redacted())
 }
 
 func isLoopback(host string) bool {

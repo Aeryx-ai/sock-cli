@@ -103,6 +103,26 @@ func TestValidation(t *testing.T) {
 	}
 }
 
+func TestURLCredentialsRefusedWithoutEcho(t *testing.T) {
+	for name, u := range map[string]string{
+		"userinfo":          "https://alice:hunter2@x.example",
+		"user only":         "https://hunter2@x.example",
+		"unparseable":       "https://alice:hunter2@ho st",
+		"no host":           "https://alice:hunter2@",
+		"plain http remote": "http://alice:hunter2@x.example",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(Sources{FlagURL: u, FlagToken: tok, Getenv: env(nil), Path: filepath.Join(t.TempDir(), "none")})
+			if err == nil {
+				t.Fatal("URL with credentials accepted")
+			}
+			if strings.Contains(err.Error(), "hunter2") {
+				t.Fatalf("error echoes credentials: %v", err)
+			}
+		})
+	}
+}
+
 func TestDefaultPath(t *testing.T) {
 	p, err := DefaultPath(env(map[string]string{"XDG_CONFIG_HOME": "/xdg"}))
 	if err != nil || p != "/xdg/sock/config.toml" {
