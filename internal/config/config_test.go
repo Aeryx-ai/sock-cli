@@ -109,7 +109,9 @@ func TestURLCredentialsRefusedWithoutEcho(t *testing.T) {
 		"user only":         "https://hunter2@x.example",
 		"unparseable":       "https://alice:hunter2@ho st",
 		"no host":           "https://alice:hunter2@",
+		"scheme-less":       "alice:hunter2@x.example",
 		"plain http remote": "http://alice:hunter2@x.example",
+		"secret in query":   "http://x.example/p?token=hunter2",
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Load(Sources{FlagURL: u, FlagToken: tok, Getenv: env(nil), Path: filepath.Join(t.TempDir(), "none")})

@@ -115,8 +115,10 @@ func validate(c Config) error {
 	if u.User != nil {
 		return errors.New("server URL must not contain a user or password; put the token in SOCK_TOKEN")
 	}
-	if u.Host == "" {
-		return fmt.Errorf("server URL %q is not a valid URL", u.Redacted())
+	// A scheme-less "user:pass@host" parses as scheme "user" with the rest
+	// in Opaque, so refuse Opaque and never print the URL here.
+	if u.Host == "" || u.Opaque != "" {
+		return errors.New("server URL is not a valid absolute https URL")
 	}
 	switch u.Scheme {
 	case "https":
@@ -126,7 +128,8 @@ func validate(c Config) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("server URL %q must use https (http only for loopback)", u.Redacted())
+	// Only scheme and host: the path or query may carry secrets too.
+	return fmt.Errorf("server URL %s://%s must use https (http only for loopback)", u.Scheme, u.Host)
 }
 
 func isLoopback(host string) bool {
