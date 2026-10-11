@@ -120,7 +120,7 @@ func NewRoot(app *App) *cobra.Command {
 		SilenceErrors: true,
 	}
 	pf := root.PersistentFlags()
-	pf.StringVar(&app.flagURL, "url", "", "server URL (default $SOCK_URL)")
+	pf.StringVar(&app.flagURL, "url", "", "server URL (default $SOCK_URL, then "+config.DefaultURL+")")
 	pf.StringVar(&app.flagToken, "token", "", "bearer token (default $SOCK_TOKEN; a flag is visible in ps, prefer the env var)")
 	pf.BoolVar(&app.jsonOut, "json", false, "print as JSON lines")
 	root.AddCommand(newWhoamiCmd(app), newSendCmd(app), newFetchCmd(app), newConversationsCmd(app), newListenCmd(app))

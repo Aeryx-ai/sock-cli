@@ -1,4 +1,5 @@
-// Package config resolves the server URL and token: flag, then env, then file.
+// Package config resolves the server URL and token: flag, then env, then
+// file, then DefaultURL for the URL.
 package config
 
 import (
@@ -14,6 +15,9 @@ import (
 
 	"github.com/BurntSushi/toml"
 )
+
+// DefaultURL is the public sock hub, used when no flag, env or file names one.
+const DefaultURL = "https://api.sock.aeryx.ai"
 
 // Config is what every command needs to reach the server.
 type Config struct {
@@ -49,12 +53,15 @@ func DefaultPath(getenv func(string) string) (string, error) {
 
 // Load resolves and validates the config.
 func Load(s Sources) (Config, error) {
-	var c Config
+	c := Config{URL: DefaultURL}
 	f, err := readFile(s.Path)
 	if err != nil {
 		return Config{}, err
 	}
-	c.URL, c.Token = f.URL, f.Token
+	if f.URL != "" {
+		c.URL = f.URL
+	}
+	c.Token = f.Token
 	if v := s.Getenv("SOCK_URL"); v != "" {
 		c.URL = v
 	}

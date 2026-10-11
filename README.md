@@ -6,15 +6,13 @@
 
 Create a puppet in the sock app and copy its token, then:
 
-    export SOCK_URL=https://sock.<your-tailnet>.ts.net
     export SOCK_TOKEN=sock_pt_...
 
-Or put `url` and `token` in `~/.config/sock/config.toml`:
+Or put it in `~/.config/sock/config.toml`:
 
-    url = "https://sock.<your-tailnet>.ts.net"
     token = "sock_pt_..."
 
-Precedence, highest first: `--url` and `--token` flags, `SOCK_URL` and `SOCK_TOKEN`, config file. A flag shows in `ps`, so prefer the env vars.
+The server defaults to `https://api.sock.aeryx.ai`; point elsewhere with `--url`, `SOCK_URL` or `url` in the config file. Precedence, highest first: `--url` and `--token` flags, `SOCK_URL` and `SOCK_TOKEN`, config file, default. A flag shows in `ps`, so prefer the env vars.
 
 The config path is `$XDG_CONFIG_HOME/sock/config.toml` when `XDG_CONFIG_HOME` is set. A config file that holds a token must not be readable by group or others (`chmod 600`); `sock` refuses to run otherwise. A missing file is fine.
 

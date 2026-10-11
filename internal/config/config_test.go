@@ -50,6 +50,17 @@ func TestPrecedenceFlagOverEnvOverFile(t *testing.T) {
 	}
 }
 
+func TestDefaultURL(t *testing.T) {
+	got, err := Load(Sources{Getenv: env(map[string]string{"SOCK_TOKEN": tok}), Path: filepath.Join(t.TempDir(), "none")})
+	if err != nil || got.URL != "https://api.sock.aeryx.ai" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	p := writeFile(t, 0o600, "token = \"sock_pt_file\"\n")
+	if got, err := Load(Sources{Getenv: env(nil), Path: p}); err != nil || got.URL != DefaultURL {
+		t.Fatalf("file without url: got %+v, %v", got, err)
+	}
+}
+
 func TestMissingFileIsFine(t *testing.T) {
 	got, err := Load(Sources{Getenv: env(map[string]string{"SOCK_URL": "https://x.example", "SOCK_TOKEN": tok}), Path: filepath.Join(t.TempDir(), "nope.toml")})
 	if err != nil || got.Token != tok {
@@ -79,7 +90,6 @@ func TestValidation(t *testing.T) {
 	cases := []struct {
 		name, url, token, wantErr string
 	}{
-		{"no url", "", tok, "no server URL"},
 		{"no token", "https://x.example", "", "no token"},
 		{"whitespace only token", "https://x.example", " \t\n", "no token"},
 		{"internal whitespace token", "https://x.example", "sock_pt_abc def", "whitespace"},
