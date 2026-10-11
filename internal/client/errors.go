@@ -89,15 +89,24 @@ func Describe(err error) error {
 	if !ok {
 		var ce *connect.Error
 		if errors.As(err, &ce) {
-			return errors.New(ce.Message())
+			return errors.New(message(ce))
 		}
 		return err
 	}
 	if r == sockv1.ErrorReason_ERROR_REASON_FIELD_INVALID {
 		var ce *connect.Error
 		if errors.As(err, &ce) {
-			return errors.New(text + ": " + ce.Message())
+			return errors.New(text + ": " + message(ce))
 		}
 	}
 	return errors.New(text)
+}
+
+// message is the server's text, or the code name when it sent none, so
+// output is never a bare "sock: ".
+func message(ce *connect.Error) string {
+	if m := ce.Message(); m != "" {
+		return m
+	}
+	return ce.Code().String()
 }

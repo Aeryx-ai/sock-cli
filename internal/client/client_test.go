@@ -96,6 +96,19 @@ func TestDescribeUsesReason(t *testing.T) {
 	}
 }
 
+func TestDescribeEmptyMessageFallsBackToCode(t *testing.T) {
+	for name, err := range map[string]error{
+		"nil cause":   connect.NewError(connect.CodeUnavailable, nil),
+		"empty cause": connect.NewError(connect.CodeUnavailable, errors.New("")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := Describe(err); got == nil || got.Error() != "unavailable" {
+				t.Fatalf("Describe = %q, want %q", got, "unavailable")
+			}
+		})
+	}
+}
+
 func TestTokenNotSentOnRedirect(t *testing.T) {
 	var leaked atomic.Bool
 	other := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
