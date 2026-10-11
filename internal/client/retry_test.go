@@ -116,3 +116,37 @@ func TestRetrierZeroValueIsSafe(t *testing.T) {
 		t.Fatalf("err %v calls %d", err, calls)
 	}
 }
+
+func TestRetryAfterCappedAtMax(t *testing.T) {
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	for name, hdr := range map[string]string{
+		"huge seconds": "9223372036854775807",
+		"far date":     now.AddDate(1000, 0, 0).Format(http.TimeFormat),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeClock{now: now}
+			calls := 0
+			err := retrier(f).Do(context.Background(), func(context.Context) error {
+				calls++
+				if calls == 1 {
+					return socktest.RateLimited(hdr)
+				}
+				return nil
+			})
+			if err != nil || len(f.waits) != 1 || f.waits[0] != 30*time.Second {
+				t.Fatalf("err %v waits %v", err, f.waits)
+			}
+		})
+	}
+}
+
+func TestRetryZeroMaxDefaultsTo30s(t *testing.T) {
+	f := &fakeClock{}
+	r := retrier(f)
+	r.Max = 0
+	r.Attempts = 10
+	_ = r.Do(context.Background(), func(context.Context) error { return socktest.Unavailable() })
+	if len(f.waits) != 9 || f.waits[8] != 30*time.Second {
+		t.Fatalf("waits %v", f.waits)
+	}
+}

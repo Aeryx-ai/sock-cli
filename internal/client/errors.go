@@ -12,6 +12,9 @@ import (
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 )
 
+// maxRetryAfterSecs bounds parsed Retry-After seconds (about 31 years).
+const maxRetryAfterSecs = 1_000_000_000
+
 // Reason returns the ErrorInfo reason attached to err, or UNSPECIFIED.
 func Reason(err error) sockv1.ErrorReason {
 	var ce *connect.Error
@@ -55,8 +58,9 @@ func RetryAfter(err error, now time.Time) (time.Duration, bool) {
 	if v == "" {
 		return 0, false
 	}
-	if secs, perr := strconv.Atoi(v); perr == nil && secs >= 0 {
-		return time.Duration(secs) * time.Second, true
+	if secs, perr := strconv.ParseInt(v, 10, 64); perr == nil && secs >= 0 {
+		// Clamp before multiplying so huge values cannot overflow Duration.
+		return time.Duration(min(secs, maxRetryAfterSecs)) * time.Second, true
 	}
 	if at, perr := time.Parse(http.TimeFormat, v); perr == nil {
 		return max(at.Sub(now), 0), true

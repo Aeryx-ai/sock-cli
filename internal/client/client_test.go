@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -91,5 +93,27 @@ func TestDescribeUsesReason(t *testing.T) {
 	got := Describe(socktest.NotMember())
 	if got == nil || got.Error() != "you are not a member of that conversation" {
 		t.Fatalf("Describe = %v", got)
+	}
+}
+
+func TestTokenNotSentOnRedirect(t *testing.T) {
+	var leaked atomic.Bool
+	other := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			leaked.Store(true)
+		}
+	}))
+	t.Cleanup(other.Close)
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(first.Close)
+	c := New(config.Config{URL: first.URL, Token: socktest.Token}, "dev")
+	_, err := c.Identity.GetMe(context.Background(), connect.NewRequest(&sockv1.GetMeRequest{}))
+	if err == nil {
+		t.Fatal("redirect must surface as an error")
+	}
+	if leaked.Load() {
+		t.Fatal("token reached the redirect target")
 	}
 }
