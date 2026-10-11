@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 )
@@ -101,6 +102,9 @@ func validate(c Config) error {
 	}
 	if c.Token == "" {
 		return errors.New("no token: set SOCK_TOKEN, --token, or token in the config file")
+	}
+	if strings.ContainsFunc(c.Token, unicode.IsSpace) {
+		return errors.New("token contains whitespace; check for a stray line break or a second value")
 	}
 	if !strings.HasPrefix(c.Token, "sock_pt_") && !strings.HasPrefix(c.Token, "sock_st_") {
 		return errors.New("token must start with sock_pt_ or sock_st_")

@@ -81,6 +81,8 @@ func TestValidation(t *testing.T) {
 	}{
 		{"no url", "", tok, "no server URL"},
 		{"no token", "https://x.example", "", "no token"},
+		{"whitespace only token", "https://x.example", " \t\n", "no token"},
+		{"internal whitespace token", "https://x.example", "sock_pt_abc def", "whitespace"},
 		{"bad prefix", "https://x.example", "ghp_abc", "token must start with sock_pt_ or sock_st_"},
 		{"plain http remote", "http://x.example", tok, "https"},
 		{"http loopback ok", "http://127.0.0.1:9", tok, ""},
@@ -154,5 +156,12 @@ func TestTokenWhitespaceTrimmed(t *testing.T) {
 				t.Fatalf("token %q not trimmed", got.Token)
 			}
 		})
+	}
+}
+
+func TestInternalWhitespaceTokenNotEchoed(t *testing.T) {
+	_, err := Load(Sources{FlagURL: "https://x.example", FlagToken: "sock_pt_hunter2\nsock_pt_other", Getenv: env(nil)})
+	if err == nil || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("want an error that does not echo the token, got %v", err)
 	}
 }
