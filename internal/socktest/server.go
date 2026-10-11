@@ -55,6 +55,9 @@ type Server struct {
 	// SendErrs are returned, front first, by NotifyOwner and Send before
 	// they start succeeding.
 	SendErrs []error
+	// AckErrs are returned, front first, by Ack before it starts
+	// succeeding. A failed Ack acknowledges nothing.
+	AckErrs []error
 	// Streams are consumed, front first, one per Subscribe call. With none
 	// left, Subscribe holds the stream open until the client cancels.
 	Streams []StreamScript
@@ -211,6 +214,11 @@ func (s *Server) FetchPending(_ context.Context, req *connect.Request[sockv1.Fet
 func (s *Server) Ack(_ context.Context, req *connect.Request[sockv1.AckRequest]) (*connect.Response[sockv1.AckResponse], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.AckErrs) > 0 {
+		err := s.AckErrs[0]
+		s.AckErrs = s.AckErrs[1:]
+		return nil, err
+	}
 	for _, id := range req.Msg.GetMessageIds() {
 		s.Acked = append(s.Acked, id)
 		if s.KeepAcked {

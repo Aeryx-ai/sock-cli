@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"google.golang.org/protobuf/encoding/protojson"
 
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
@@ -349,38 +350,55 @@ func TestConversations(t *testing.T) {
 // listenUntil runs listen until done reports true, then cancels it.
 func listenUntil(t *testing.T, app *App, done func() bool, args ...string) (string, string, error) {
 	t.Helper()
+	var out, errOut syncBuffer
+	err := listenUntilTo(t, app, &out, &errOut, done, args...)
+	return out.String(), errOut.String(), err
+}
+
+// listenUntilTo is listenUntil with caller-supplied output buffers.
+func listenUntilTo(t *testing.T, app *App, out, errOut *syncBuffer, done func() bool, args ...string) error {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var out, errOut syncBuffer
 	root := NewRoot(app)
 	root.SetArgs(append([]string{"listen"}, args...))
 	root.SetIn(strings.NewReader(""))
-	root.SetOut(&out)
-	root.SetErr(&errOut)
+	root.SetOut(out)
+	root.SetErr(errOut)
 	result := make(chan error, 1)
 	go func() { result <- root.ExecuteContext(ctx) }()
 	for !done() {
 		select {
 		case err := <-result:
-			return out.String(), errOut.String(), err
+			return err
 		case <-ctx.Done():
 			t.Fatalf("listen did not reach the expected state; stderr %q", errOut.String())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 	cancel()
-	err := <-result // wait for listen to exit before reading its output
-	return out.String(), errOut.String(), err
+	return <-result // wait for listen to exit before reading its output
 }
 
 type syncBuffer struct {
 	mu sync.Mutex
 	b  strings.Builder
+	// onWrite runs before each write, so a test can observe server state at
+	// the moment output is produced.
+	onWrite func()
+	// err, when set, fails every write.
+	err error
 }
 
 func (s *syncBuffer) Write(p []byte) (int, error) {
+	if s.onWrite != nil {
+		s.onWrite()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.err != nil {
+		return 0, s.err
+	}
 	return s.b.Write(p)
 }
 
@@ -696,5 +714,216 @@ func TestListenExecNeverInterpolatesMessage(t *testing.T) {
 	b, err := os.ReadFile(got)
 	if err != nil || !strings.Contains(string(b), "m-1") || !strings.Contains(string(b), "touch") {
 		t.Fatalf("stdin %q err %v", b, err)
+	}
+}
+
+func TestReconnectable(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"clean close", nil, true},
+		{"plain error", errors.New("connection reset"), true},
+		{"idle watchdog", errStreamIdle, true},
+		{"unavailable", connect.NewError(connect.CodeUnavailable, errors.New("x")), true},
+		{"resource exhausted", connect.NewError(connect.CodeResourceExhausted, errors.New("x")), true},
+		{"internal", connect.NewError(connect.CodeInternal, errors.New("x")), true},
+		{"unauthenticated", connect.NewError(connect.CodeUnauthenticated, errors.New("x")), false},
+		{"permission denied", connect.NewError(connect.CodePermissionDenied, errors.New("x")), false},
+		{"invalid argument", connect.NewError(connect.CodeInvalidArgument, errors.New("x")), false},
+		{"unimplemented", connect.NewError(connect.CodeUnimplemented, errors.New("x")), false},
+		{"wrapped terminal", fmt.Errorf("wrap: %w", connect.NewError(connect.CodeUnauthenticated, errors.New("x"))), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := reconnectable(c.err); got != c.want {
+				t.Fatalf("reconnectable(%v) = %v, want %v", c.err, got, c.want)
+			}
+		})
+	}
+}
+
+func TestListenBackoffCapsAtReconnectMax(t *testing.T) {
+	srv := socktest.New(t)
+	for range 7 {
+		srv.Streams = append(srv.Streams, socktest.StreamScript{End: socktest.Unavailable()})
+	}
+	app := testApp(t, srv)
+	waits := recordSleeps(&app.Sleep)
+	_, _, err := listenUntil(t, app, func() bool { return subscribes(srv) >= 8 })
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, time.Minute}
+	if w := waits(); len(w) < len(want) || !slices.Equal(w[:len(want)], want) {
+		t.Fatalf("waits %v, want prefix %v", w, want)
+	}
+	for _, w := range waits() {
+		if w > time.Minute {
+			t.Fatalf("wait %v exceeds the 1m cap", w)
+		}
+	}
+}
+
+// ackedWhenWritten returns a buffer that records how many acks the server
+// had seen each time output was written.
+func ackedWhenWritten(srv *socktest.Server) (*syncBuffer, func() []int) {
+	var mu sync.Mutex
+	var seen []int
+	buf := &syncBuffer{onWrite: func() {
+		_, acked, _, _ := srv.Snapshot()
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, len(acked))
+	}}
+	return buf, func() []int {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(seen)
+	}
+}
+
+func TestListenAcksOnlyAfterPrinting(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{{
+		Events: []*sockv1.SubscribeResponse{
+			socktest.Event(socktest.Text("m-1", "c-1", 1, "a")),
+			socktest.Event(socktest.Text("m-2", "c-1", 2, "b")),
+		},
+		Hold: true,
+	}}
+	out, seen := ackedWhenWritten(srv)
+	var errOut syncBuffer
+	acked := ackedCount(srv)
+	if err := listenUntilTo(t, testApp(t, srv), out, &errOut, func() bool { return acked() == 2 }); err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	// Message n is printed while only the n-1 earlier ones are acked.
+	if got := seen(); !slices.Equal(got, []int{0, 1}) {
+		t.Fatalf("acks seen at each print %v, want [0 1]", got)
+	}
+}
+
+func TestFetchAcksOnlyAfterPrintingBatch(t *testing.T) {
+	srv := socktest.New(t)
+	for i := range 150 {
+		srv.Pending = append(srv.Pending, socktest.Text(fmt.Sprintf("m-%d", i), "c-1", int64(i+1), "hello"))
+	}
+	out, seen := ackedWhenWritten(srv)
+	if err := runTo(t, testApp(t, srv), out, "fetch"); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	got := seen()
+	if len(got) != 150 {
+		t.Fatalf("%d prints, want 150", len(got))
+	}
+	for i, n := range got {
+		if want := 100 * (i / 100); n != want {
+			t.Fatalf("print %d saw %d acks, want %d (batch acked only after its prints)", i, n, want)
+		}
+	}
+}
+
+func TestFetchNoAckMultiBatchPrintsOnlyOneBatch(t *testing.T) {
+	srv := socktest.New(t)
+	for i := range fetchBatch + 50 {
+		srv.Pending = append(srv.Pending, socktest.Text(fmt.Sprintf("m-%d", i), "c-1", int64(i+1), "hello"))
+	}
+	out, _, err := run(t, testApp(t, srv), nil, "fetch", "--no-ack")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if n := strings.Count(out, "\n"); n != fetchBatch {
+		t.Fatalf("printed %d lines, want one batch of %d", n, fetchBatch)
+	}
+	if _, acked, _, _ := srv.Snapshot(); len(acked) != 0 {
+		t.Fatalf("acked %v with --no-ack", acked)
+	}
+}
+
+// runTo executes the root command with stdout going to out.
+func runTo(t *testing.T, app *App, out io.Writer, args ...string) error {
+	t.Helper()
+	root := NewRoot(app)
+	root.SetArgs(args)
+	root.SetIn(strings.NewReader(""))
+	root.SetOut(out)
+	root.SetErr(io.Discard)
+	return root.ExecuteContext(context.Background())
+}
+
+func TestFetchPrintFailureLeavesMessagesUnacked(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Pending = []*sockv1.Message{socktest.Text("m-1", "c-1", 1, "a"), socktest.Text("m-2", "c-1", 2, "b")}
+	err := runTo(t, testApp(t, srv), &syncBuffer{err: errors.New("broken pipe")}, "fetch")
+	if err == nil || !strings.Contains(err.Error(), "broken pipe") {
+		t.Fatalf("want the print error, got %v", err)
+	}
+	if _, acked, _, _ := srv.Snapshot(); len(acked) != 0 {
+		t.Fatalf("acked %v after a print failure", acked)
+	}
+}
+
+func TestFetchAckFailureLeavesMessagesPending(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Pending = []*sockv1.Message{socktest.Text("m-1", "c-1", 1, "a")}
+	srv.AckErrs = []error{socktest.NotMember()} // permanent: not retried
+	var out syncBuffer
+	if err := runTo(t, testApp(t, srv), &out, "fetch"); err == nil {
+		t.Fatal("want an error when the ack fails")
+	}
+	if _, acked, _, _ := srv.Snapshot(); len(acked) != 0 {
+		t.Fatalf("acked %v after an ack failure", acked)
+	}
+	srv.AckErrs = nil
+	if err := runTo(t, testApp(t, srv), &out, "fetch"); err != nil {
+		t.Fatalf("second fetch: %v", err)
+	}
+	if strings.Count(out.String(), " #1 ") != 2 {
+		t.Fatalf("message not redelivered after the failed ack: %q", out.String())
+	}
+}
+
+func TestListenPrintFailureLeavesMessageUnacked(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{{
+		Events: []*sockv1.SubscribeResponse{socktest.Event(socktest.Text("m-1", "c-1", 1, "a"))},
+		Hold:   true,
+	}}
+	out := &syncBuffer{err: errors.New("broken pipe")}
+	var errOut syncBuffer
+	done := func() bool { return strings.Contains(errOut.String(), "not acked") }
+	if err := listenUntilTo(t, testApp(t, srv), out, &errOut, done); err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if _, acked, _, _ := srv.Snapshot(); len(acked) != 0 {
+		t.Fatalf("acked %v after a print failure", acked)
+	}
+	if !strings.Contains(errOut.String(), "m-1") || !strings.Contains(errOut.String(), "broken pipe") {
+		t.Fatalf("stderr %q", errOut.String())
+	}
+}
+
+func TestListenAckFailureLogsAndKeepsStreaming(t *testing.T) {
+	srv := socktest.New(t)
+	srv.AckErrs = []error{socktest.NotMember()}
+	srv.Streams = []socktest.StreamScript{{
+		Events: []*sockv1.SubscribeResponse{
+			socktest.Event(socktest.Text("m-1", "c-1", 1, "a")),
+			socktest.Event(socktest.Text("m-2", "c-1", 2, "b")),
+		},
+		Hold: true,
+	}}
+	acked := ackedCount(srv)
+	_, errOut, err := listenUntil(t, testApp(t, srv), func() bool { return acked() == 1 })
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if _, ids, _, _ := srv.Snapshot(); len(ids) != 1 || ids[0] != "m-2" {
+		t.Fatalf("acked %v, want only m-2", ids)
+	}
+	if !strings.Contains(errOut, "message m-1") {
+		t.Fatalf("stderr %q", errOut)
 	}
 }
