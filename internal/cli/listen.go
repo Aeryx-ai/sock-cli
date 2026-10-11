@@ -174,14 +174,15 @@ func (l *listener) handle(ctx context.Context, m *sockv1.Message) error {
 }
 
 // reconnectable reports whether a stream failure is worth reconnecting
-// after. Refusals about who the caller is or what it sent are final.
+// after. Refusals about who the caller is or what it sent are final, and so
+// is Unimplemented: a wrong URL never heals.
 func reconnectable(err error) bool {
 	var ce *connect.Error
 	if !errors.As(err, &ce) {
 		return true // network-level failure
 	}
 	switch ce.Code() {
-	case connect.CodeUnauthenticated, connect.CodePermissionDenied, connect.CodeInvalidArgument:
+	case connect.CodeUnauthenticated, connect.CodePermissionDenied, connect.CodeInvalidArgument, connect.CodeUnimplemented:
 		return false
 	}
 	return true

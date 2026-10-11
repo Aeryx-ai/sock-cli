@@ -535,6 +535,29 @@ func TestListenStopsOnBadToken(t *testing.T) {
 	}
 }
 
+// A wrong URL path is a 404, which Connect reports as Unimplemented. It
+// never fixes itself, so listen must exit instead of retrying forever.
+func TestListenStopsOnWrongURL(t *testing.T) {
+	srv := socktest.New(t)
+	app := testApp(t, srv)
+	app.Getenv = func(k string) string {
+		return map[string]string{"SOCK_URL": srv.URL + "/not-sock", "SOCK_TOKEN": socktest.Token}[k]
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	root := NewRoot(app)
+	root.SetArgs([]string{"listen"})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	err := root.ExecuteContext(ctx)
+	if ctx.Err() != nil {
+		t.Fatal("listen kept retrying a wrong URL")
+	}
+	if err == nil || !strings.Contains(err.Error(), "404") {
+		t.Fatalf("want a 404 error for a wrong URL, got %v", err)
+	}
+}
+
 func TestListenExecAcksOnlyOnSuccess(t *testing.T) {
 	srv := socktest.New(t)
 	srv.Streams = []socktest.StreamScript{{
