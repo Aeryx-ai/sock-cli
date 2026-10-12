@@ -1,10 +1,31 @@
 # sock-cli
 
-`sock` lets scripts, jobs and agents message you on [sock](https://github.com/guygrigsby/sock-contract).
+`sock` lets scripts, jobs and agents message you on [sock](https://github.com/guygrigsby/sock-contract), and lets you do everything the sock app does from a terminal.
 
-## Setup
+## Sign in as yourself
 
-Create a puppet in the sock app and copy its token, then:
+    sock login
+
+`login` opens the hub's sign-in page in your browser, you continue to Sign in with Apple, and the result comes back to a listener on `127.0.0.1` that `sock` runs for at most 10 minutes. The session token goes to the config file (below), never to the terminal. It prints `signed in as @<handle> on device <id>`; if the handle is not yours, run `sock logout`.
+
+New to sock:
+
+    sock register --invite <code> --handle <handle> --name "<display name>" --accept-terms 2026-10-11
+
+`--accept-terms` says you agree to the [terms of service](https://aeryx.ai/sock/terms/) and the [privacy policy](https://aeryx.ai/sock/privacy/); `sock register --help` names the version this build ships.
+
+Both take `--label` (the device name in `sock devices`, default `sock CLI on <hostname>`), `--no-browser` (print the URL instead of opening it) and `--port` (the listener's port, 1024 to 65535). On a remote machine:
+
+    ssh -L 8765:127.0.0.1:8765 remote-box
+    sock login --no-browser --port 8765   # on remote-box; open the URL on your own machine
+
+Treat that URL as secret until the sign-in finishes: anyone who opens it first can sign your `sock` into their account.
+
+`login` and `register` refuse when the config file already holds a token, since a puppet token there is shown only once. Run `sock logout` first, or keep a second config with `XDG_CONFIG_HOME=<dir> sock login`. `sock logout` signs the session out and removes its token; it keeps the token when the server is unreachable, so retry.
+
+## Set up a puppet
+
+Create a puppet (`sock puppets create <name> --token-label <label>`, or in the sock app) and copy its token, then:
 
     export SOCK_TOKEN=sock_pt_...
 
@@ -14,7 +35,9 @@ Or put it in `~/.config/sock/config.toml`:
 
 The server defaults to `https://api.sock.aeryx.ai`; point elsewhere with `--url`, `SOCK_URL` or `url` in the config file. Precedence, highest first: `--url` and `--token` flags, `SOCK_URL` and `SOCK_TOKEN`, config file, default. A flag shows in `ps`, so prefer the env vars.
 
-The config path is `$XDG_CONFIG_HOME/sock/config.toml` when `XDG_CONFIG_HOME` is set. A config file that holds a token must not be readable by group or others (`chmod 600`); `sock` refuses to run otherwise. A missing file is fine.
+The config path is `$XDG_CONFIG_HOME/sock/config.toml` when `XDG_CONFIG_HOME` is set. A config file that holds a token or an access gate must not be readable by group or others (`chmod 600`); `sock` refuses to run otherwise. A missing file is fine.
+
+A server behind an access gate (staging) takes it from `SOCK_ACCESS_GATE` or `access_gate` in the config file. `sock` sends it as the `Sock-Access-Gate` header to the configured server only, and never prints it.
 
 ## Use
 
@@ -28,7 +51,44 @@ The config path is `$XDG_CONFIG_HOME/sock/config.toml` when `XDG_CONFIG_HOME` is
     sock conversations
     sock whoami
 
-Global flags: `--url`, `--token`, `--json` (JSON lines instead of text). `send` without `--conversation` goes to your owner and needs a puppet token. `send` retries transient failures with one idempotency key, so a retry never posts twice.
+Global flags: `--url`, `--token`, `--json` (JSON lines instead of text). `send` without `--conversation` goes to your owner and needs a puppet token; a human always passes `--conversation`. `send` retries transient failures with one idempotency key, so a retry never posts twice.
+
+## Commands
+
+An `<account>` is an account id or `@handle`.
+
+    sock login | register | logout
+    sock whoami
+    sock terms                                   # accepted and current version
+    sock terms accept <version>
+    sock name set <display name>
+    sock handle set <handle>
+    sock accounts get <id>...
+    sock accounts lookup <handle>
+    sock devices                                 # (this) marks the calling device
+    sock devices revoke <device id>              # also revokes a puppet token
+    sock puppets
+    sock puppets create <name> --token-label <label>
+    sock puppets token <puppet id> --label <label>
+    sock puppets erase <puppet id> [--yes]
+    sock conversations
+    sock conversations direct <account>
+    sock conversations group [<account>...]
+    sock conversations add <conversation id> <account>
+    sock conversations remove <conversation id> <account>
+    sock conversations leave <conversation id>
+    sock send [--conversation <id>] [text...]
+    sock listen [--exec <cmd>]
+    sock fetch [--no-ack]
+    sock ack <message id>...
+    sock block <account>
+    sock unblock <account>
+    sock blocks
+    sock report <account> --reason <reason> [--note <text>] [--evidence <file>]
+    sock export                                  # always one JSON object
+    sock account erase [--confirm <handle>]
+
+`puppets create` and `puppets token` print the token alone on stdout so it pipes; everything else they say goes to stderr. `report --evidence` takes up to 20 messages, one per line, exactly as `sock fetch --json` printed them. `puppets erase` and `account erase` ask on a terminal; off one they need `--yes` or `--confirm <handle>`.
 
 ## listen --exec
 
