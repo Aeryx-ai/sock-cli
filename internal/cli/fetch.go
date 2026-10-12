@@ -78,3 +78,21 @@ func ack(ctx context.Context, app *App, c Clients, ids []string) error {
 	})
 	return err
 }
+
+// maxAck is Ack's id limit.
+const maxAck = 500
+
+func newAckCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "ack <message id>...",
+		Short: "Acknowledge messages, 1 to 500",
+		Args:  cobra.RangeArgs(1, maxAck),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := app.clients()
+			if err != nil {
+				return err
+			}
+			return ack(cmd.Context(), app, c, args)
+		},
+	}
+}

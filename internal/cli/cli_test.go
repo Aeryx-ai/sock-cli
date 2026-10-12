@@ -100,12 +100,12 @@ func TestWhoamiJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("whoami: %v", err)
 	}
-	var a sockv1.Account
-	if err := protojson.Unmarshal([]byte(out), &a); err != nil {
+	var me sockv1.GetMeResponse
+	if err := protojson.Unmarshal([]byte(out), &me); err != nil {
 		t.Fatalf("not JSON: %q: %v", out, err)
 	}
-	if a.GetPuppet().GetName() != "build-bot" {
-		t.Fatalf("account %v", &a)
+	if me.GetAccount().GetPuppet().GetName() != "build-bot" {
+		t.Fatalf("account %v", &me)
 	}
 }
 

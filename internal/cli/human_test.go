@@ -1,0 +1,400 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"connectrpc.com/connect"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
+
+	"github.com/guygrigsby/sock-cli/internal/socktest"
+)
+
+// signedIn is an App holding the fake's human session token in SOCK_TOKEN,
+// talking to a fake whose caller is that human.
+func signedIn(t *testing.T) (*App, *socktest.Server) {
+	t.Helper()
+	srv := socktest.New(t)
+	srv.Me = socktest.Human()
+	srv.Accounts = []*sockv1.Account{socktest.Human(), {Id: "human-2", DisplayName: "Ann", Kind: &sockv1.Account_Human{Human: &sockv1.Human{Handle: "ann"}}}}
+	return humanApp(t, srv, map[string]string{"SOCK_TOKEN": socktest.HumanToken}), srv
+}
+
+func lastRequest[T any](t *testing.T, srv *socktest.Server, method string) T {
+	t.Helper()
+	calls := srv.CallsTo(method)
+	if len(calls) == 0 {
+		t.Fatalf("no %s call", method)
+	}
+	return calls[len(calls)-1].Msg.(T)
+}
+
+func mustRun(t *testing.T, app *App, args ...string) (string, string) {
+	t.Helper()
+	out, errOut, err := run(t, app, nil, args...)
+	if err != nil {
+		t.Fatalf("sock %s: %v (stderr %q)", strings.Join(args, " "), err, errOut)
+	}
+	return out, errOut
+}
+
+var fixed = time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC).Local().Format(time.DateTime)
+
+func TestWhoamiHumanShowsTerms(t *testing.T) {
+	app, srv := signedIn(t)
+	srv.AcceptedTerms = ""
+	out, _ := mustRun(t, app, "whoami")
+	if out != "Guy  human @guy  id human-1\nterms accepted none, current 2026-10-11\n" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestTerms(t *testing.T) {
+	app, srv := signedIn(t)
+	srv.AcceptedTerms = "2026-01-01"
+	if out, _ := mustRun(t, app, "terms"); out != "accepted 2026-01-01, current 2026-10-11\nhttps://aeryx.ai/sock/terms/\n" {
+		t.Fatalf("terms: %q", out)
+	}
+	if out, _ := mustRun(t, app, "terms", "accept", "2026-10-11"); out != "accepted terms 2026-10-11\n" {
+		t.Fatalf("accept: %q", out)
+	}
+	if v := lastRequest[*sockv1.AcceptTermsRequest](t, srv, "AcceptTerms").GetTermsVersion(); v != "2026-10-11" {
+		t.Fatalf("version %q", v)
+	}
+}
+
+func TestHumanErrorsNameTheCommand(t *testing.T) {
+	cases := map[sockv1.ErrorReason]string{
+		sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID:      "run sock login",
+		sockv1.ErrorReason_ERROR_REASON_TERMS_NOT_ACCEPTED: "sock terms accept",
+	}
+	for reason, want := range cases {
+		app, srv := signedIn(t)
+		srv.Fail = map[string]error{"ChangeHandle": socktest.Error(connect.CodeFailedPrecondition, reason)}
+		if _, _, err := run(t, app, nil, "handle", "set", "x"); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%v: got %v", reason, err)
+		}
+	}
+}
+
+func TestPuppetTokenErrorsKeepPuppetWording(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Fail = map[string]error{"GetMe": socktest.Error(connect.CodeUnauthenticated, sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID)}
+	_, _, err := run(t, testApp(t, srv), nil, "whoami")
+	if err == nil || strings.Contains(err.Error(), "sock login") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestAccessGateSentAndNeverPrinted(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Fail = map[string]error{"GetMe": socktest.Unavailable()}
+	app := humanApp(t, srv, map[string]string{"SOCK_TOKEN": socktest.HumanToken, "SOCK_ACCESS_GATE": "gate-secret"})
+	_, errOut, err := run(t, app, nil, "whoami")
+	if err == nil || strings.Contains(err.Error()+errOut, "gate-secret") {
+		t.Fatalf("got %v, stderr %q", err, errOut)
+	}
+	for _, c := range srv.CallsTo("GetMe") {
+		if c.Header.Get("Sock-Access-Gate") != "gate-secret" {
+			t.Fatalf("gate missing on %v", c.Header)
+		}
+	}
+}
+
+func TestProfileCommands(t *testing.T) {
+	app, srv := signedIn(t)
+	if out, _ := mustRun(t, app, "name", "set", "Guy", "G"); out != "Guy G  human @guy  id human-1\n" {
+		t.Fatalf("name set: %q", out)
+	}
+	mustRun(t, app, "handle", "set", "@guyg")
+	if h := lastRequest[*sockv1.ChangeHandleRequest](t, srv, "ChangeHandle").GetHandle(); h != "guyg" {
+		t.Fatalf("handle %q", h)
+	}
+	if out, _ := mustRun(t, app, "accounts", "get", "human-2", "nope"); out != "Ann  human @ann  id human-2\n" {
+		t.Fatalf("accounts get: %q", out)
+	}
+	if out, _ := mustRun(t, app, "accounts", "lookup", "@ann"); out != "Ann  human @ann  id human-2\n" {
+		t.Fatalf("accounts lookup: %q", out)
+	}
+	ids := make([]string, 101)
+	for i := range ids {
+		ids[i] = fmt.Sprint(i)
+	}
+	if _, _, err := run(t, app, nil, append([]string{"accounts", "get"}, ids...)...); err == nil {
+		t.Fatal("101 ids accepted")
+	}
+}
+
+func TestDevices(t *testing.T) {
+	app, srv := signedIn(t)
+	srv.Devices = []*sockv1.Device{socktest.Device(socktest.HumanDeviceID, "human-1", "sock CLI on box"), socktest.Device("d-2", "human-1", "iPhone")}
+	out, _ := mustRun(t, app, "devices")
+	want := socktest.HumanDeviceID + "  sock CLI on box  created " + fixed + "  (this)\n" + "d-2  iPhone  created " + fixed + "\n"
+	if out != want {
+		t.Fatalf("got %q, want %q", out, want)
+	}
+	if out, _ := mustRun(t, app, "devices", "revoke", "d-2"); out != "revoked d-2\n" {
+		t.Fatalf("revoke: %q", out)
+	}
+	if id := lastRequest[*sockv1.RevokeDeviceRequest](t, srv, "RevokeDevice").GetDeviceId(); id != "d-2" {
+		t.Fatalf("revoked %q", id)
+	}
+	out, _ = mustRun(t, app, "--json", "devices")
+	if lines := strings.Split(strings.TrimSpace(out), "\n"); len(lines) != 2 {
+		t.Fatalf("json lines %q", out)
+	}
+}
+
+func TestPuppets(t *testing.T) {
+	app, srv := signedIn(t)
+	srv.Puppets = []*sockv1.PuppetWithDevices{{Puppet: socktest.Puppet("p-1", "ci"), Devices: []*sockv1.Device{socktest.Device("pd-1", "p-1", "runner")}}}
+	out, _ := mustRun(t, app, "puppets")
+	if want := "ci  puppet ci of human-1  id p-1\n  pd-1  runner  created " + fixed + "\n"; out != want {
+		t.Fatalf("got %q, want %q", out, want)
+	}
+
+	out, errOut := mustRun(t, app, "puppets", "create", "ci", "--token-label", "runner")
+	if out != "sock_pt_device-new_secret\n" || !strings.Contains(errOut, "puppet ci of human-1") || !strings.Contains(errOut, "device device-new") {
+		t.Fatalf("create: stdout %q stderr %q", out, errOut)
+	}
+	if req := lastRequest[*sockv1.CreatePuppetRequest](t, srv, "CreatePuppet"); req.GetName() != "ci" || req.GetTokenLabel() != "runner" {
+		t.Fatalf("create request %v", req)
+	}
+	out, _ = mustRun(t, app, "--json", "puppets", "create", "ci", "--token-label", "runner")
+	var cr sockv1.CreatePuppetResponse
+	if err := protojson.Unmarshal([]byte(out), &cr); err != nil || cr.GetToken() == "" {
+		t.Fatalf("create json %q: %v", out, err)
+	}
+	if _, _, err := run(t, app, nil, "puppets", "create", "ci"); err == nil {
+		t.Fatal("create without --token-label accepted")
+	}
+
+	out, errOut = mustRun(t, app, "puppets", "token", "p-1", "--label", "laptop")
+	if out != "sock_pt_device-minted_secret\n" || errOut != "device device-minted\n" {
+		t.Fatalf("token: stdout %q stderr %q", out, errOut)
+	}
+	if req := lastRequest[*sockv1.MintPuppetTokenRequest](t, srv, "MintPuppetToken"); req.GetPuppetId() != "p-1" || req.GetLabel() != "laptop" {
+		t.Fatalf("mint request %v", req)
+	}
+}
+
+func TestPuppetErase(t *testing.T) {
+	app, srv := signedIn(t)
+	if _, _, err := run(t, app, nil, "puppets", "erase", "p-1"); err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("off a terminal without --yes: %v", err)
+	}
+	app.StdinIsTTY = func() bool { return true }
+	if _, _, err := run(t, app, strings.NewReader("no\n"), "puppets", "erase", "p-1"); err == nil {
+		t.Fatal("declined erase went ahead")
+	}
+	if len(srv.CallsTo("ErasePuppet")) != 0 {
+		t.Fatal("ErasePuppet called without confirmation")
+	}
+	if out, _, err := run(t, app, strings.NewReader("yes\n"), "puppets", "erase", "p-1"); err != nil || out != "erased p-1\n" {
+		t.Fatalf("confirmed erase: %q, %v", out, err)
+	}
+	app.StdinIsTTY = func() bool { return false }
+	if out, _ := mustRun(t, app, "puppets", "erase", "p-2", "--yes"); out != "erased p-2\n" {
+		t.Fatalf("--yes: %q", out)
+	}
+}
+
+func TestConversationCommands(t *testing.T) {
+	app, srv := signedIn(t)
+	if out, _ := mustRun(t, app, "conversations", "direct", "@ann"); out != "conv-direct  direct  members human-1,human-2\n" {
+		t.Fatalf("direct: %q", out)
+	}
+	if out, _ := mustRun(t, app, "conversations", "group", "@ann", "p-1"); out != "conv-group  group  members human-1,human-2,p-1\n" {
+		t.Fatalf("group: %q", out)
+	}
+	if out, _ := mustRun(t, app, "conversations", "group"); out != "conv-group  group  members human-1\n" {
+		t.Fatalf("empty group: %q", out)
+	}
+	twenty := make([]string, 20)
+	for i := range twenty {
+		twenty[i] = fmt.Sprint("a", i)
+	}
+	if _, _, err := run(t, app, nil, append([]string{"conversations", "group"}, twenty...)...); err == nil {
+		t.Fatal("20 others accepted")
+	}
+	mustRun(t, app, "conversations", "add", "c-1", "@ann")
+	if req := lastRequest[*sockv1.AddMemberRequest](t, srv, "AddMember"); req.GetConversationId() != "c-1" || req.GetAccountId() != "human-2" {
+		t.Fatalf("add %v", req)
+	}
+	mustRun(t, app, "conversations", "remove", "c-1", "p-1")
+	if req := lastRequest[*sockv1.RemoveMemberRequest](t, srv, "RemoveMember"); req.GetConversationId() != "c-1" || req.GetAccountId() != "p-1" {
+		t.Fatalf("remove %v", req)
+	}
+	if out, _ := mustRun(t, app, "conversations", "leave", "c-1"); out != "left c-1\n" {
+		t.Fatalf("leave: %q", out)
+	}
+	if _, _, err := run(t, app, nil, "conversations", "direct", "@nobody"); err == nil || !strings.Contains(err.Error(), "@nobody") {
+		t.Fatalf("unknown handle: %v", err)
+	}
+}
+
+func TestHumanSendNeedsConversation(t *testing.T) {
+	app, srv := signedIn(t)
+	if _, _, err := run(t, app, nil, "send", "hi"); err == nil || !strings.Contains(err.Error(), "--conversation") {
+		t.Fatalf("got %v", err)
+	}
+	if len(srv.CallsTo("NotifyOwner")) != 0 {
+		t.Fatal("NotifyOwner called for a human")
+	}
+	mustRun(t, app, "send", "--conversation", "c-1", "hi")
+	if req := lastRequest[*sockv1.SendRequest](t, srv, "Send"); req.GetConversationId() != "c-1" || req.GetText() != "hi" {
+		t.Fatalf("send %v", req)
+	}
+}
+
+func TestAck(t *testing.T) {
+	app, srv := signedIn(t)
+	if out, _ := mustRun(t, app, "ack", "m-1", "m-2"); out != "" {
+		t.Fatalf("ack printed %q", out)
+	}
+	if ids := lastRequest[*sockv1.AckRequest](t, srv, "Ack").GetMessageIds(); strings.Join(ids, ",") != "m-1,m-2" {
+		t.Fatalf("acked %v", ids)
+	}
+	if _, _, err := run(t, app, nil, "ack"); err == nil {
+		t.Fatal("ack with no ids accepted")
+	}
+	ids := make([]string, 501)
+	for i := range ids {
+		ids[i] = fmt.Sprint(i)
+	}
+	if _, _, err := run(t, app, nil, append([]string{"ack"}, ids...)...); err == nil {
+		t.Fatal("501 ids accepted")
+	}
+}
+
+func TestBlocks(t *testing.T) {
+	app, srv := signedIn(t)
+	if out, _ := mustRun(t, app, "block", "@ann"); out != "blocked human-2\n" {
+		t.Fatalf("block: %q", out)
+	}
+	if id := lastRequest[*sockv1.BlockAccountRequest](t, srv, "BlockAccount").GetAccountId(); id != "human-2" {
+		t.Fatalf("blocked %q", id)
+	}
+	if out, _ := mustRun(t, app, "unblock", "human-2"); out != "unblocked human-2\n" {
+		t.Fatalf("unblock: %q", out)
+	}
+	srv.Blocked = []*sockv1.BlockedAccount{{AccountId: "human-2", BlockedAt: timestamppb.New(time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC))}}
+	if out, _ := mustRun(t, app, "blocks"); out != "human-2  blocked "+fixed+"\n" {
+		t.Fatalf("blocks: %q", out)
+	}
+}
+
+// evidenceFile writes n messages as sock fetch --json prints them.
+func evidenceFile(t *testing.T, n int, tag []byte) string {
+	t.Helper()
+	srv := socktest.New(t)
+	for i := range n {
+		m := socktest.Text(fmt.Sprint("m-", i), "c-1", int64(i+1), "mean words")
+		m.SenderId = "human-2"
+		m.EvidenceTag = tag
+		srv.Pending = append(srv.Pending, m)
+	}
+	out, _, err := run(t, testApp(t, srv), nil, "--json", "fetch", "--no-ack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "evidence.jsonl")
+	if err := os.WriteFile(p, []byte(out), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestReport(t *testing.T) {
+	app, srv := signedIn(t)
+	tag := []byte("0123456789abcdef0123456789abcdef")
+	out, _ := mustRun(t, app, "report", "@ann", "--reason", "harassment", "--note", "see these", "--evidence", evidenceFile(t, 2, tag))
+	if out != "filed report report-1\n" {
+		t.Fatalf("report: %q", out)
+	}
+	req := lastRequest[*sockv1.FileReportRequest](t, srv, "FileReport")
+	if req.GetSubjectId() != "human-2" || req.GetReason() != sockv1.ReportReason_REPORT_REASON_HARASSMENT || req.GetNote() != "see these" || len(req.GetEvidence()) != 2 {
+		t.Fatalf("request %v", req)
+	}
+	ev := req.GetEvidence()[1]
+	if ev.GetMessageId() != "m-1" || ev.GetSeq() != 2 || ev.GetSenderId() != "human-2" || ev.GetText() != "mean words" || string(ev.GetEvidenceTag()) != string(tag) || ev.GetSentAt() == nil {
+		t.Fatalf("evidence %v", ev)
+	}
+
+	for name, args := range map[string][]string{
+		"bad reason":   {"report", "@ann", "--reason", "rude"},
+		"no reason":    {"report", "@ann"},
+		"too many":     {"report", "@ann", "--reason", "spam", "--evidence", evidenceFile(t, 21, tag)},
+		"no tag":       {"report", "@ann", "--reason", "spam", "--evidence", evidenceFile(t, 1, nil)},
+		"missing file": {"report", "@ann", "--reason", "spam", "--evidence", filepath.Join(t.TempDir(), "none")},
+	} {
+		if _, _, err := run(t, app, nil, args...); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+	if n := len(srv.CallsTo("FileReport")); n != 1 {
+		t.Fatalf("%d FileReport calls; refusals reached the server", n)
+	}
+}
+
+func TestExport(t *testing.T) {
+	app, srv := signedIn(t)
+	srv.Blocked = []*sockv1.BlockedAccount{{AccountId: "human-2"}}
+	out, _ := mustRun(t, app, "export")
+	var got struct {
+		Identity  json.RawMessage `json:"identity"`
+		Messaging json.RawMessage `json:"messaging"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("not one JSON object: %q: %v", out, err)
+	}
+	var id sockv1.ExportIdentityDataResponse
+	var msg sockv1.ExportMessagingDataResponse
+	if err := protojson.Unmarshal(got.Identity, &id); err != nil || id.GetAccount().GetId() != "human-1" {
+		t.Fatalf("identity %s: %v", got.Identity, err)
+	}
+	if err := protojson.Unmarshal(got.Messaging, &msg); err != nil || len(msg.GetBlockedAccountIds()) != 1 {
+		t.Fatalf("messaging %s: %v", got.Messaging, err)
+	}
+}
+
+func TestAccountErase(t *testing.T) {
+	app, srv := signedIn(t)
+	if _, _, err := run(t, app, nil, "account", "erase"); err == nil || !strings.Contains(err.Error(), "--confirm") {
+		t.Fatalf("off a terminal: %v", err)
+	}
+	if _, _, err := run(t, app, nil, "account", "erase", "--confirm", "ann"); err == nil {
+		t.Fatal("wrong handle accepted")
+	}
+	app.StdinIsTTY = func() bool { return true }
+	if _, _, err := run(t, app, strings.NewReader("ann\n"), "account", "erase"); err == nil {
+		t.Fatal("wrong typed handle accepted")
+	}
+	if len(srv.CallsTo("EraseAccount")) != 0 {
+		t.Fatal("EraseAccount called without confirmation")
+	}
+	if out, _, err := run(t, app, strings.NewReader("guy\n"), "account", "erase"); err != nil || out != "erased\n" {
+		t.Fatalf("typed handle: %q, %v", out, err)
+	}
+}
+
+func TestAccountEraseRemovesFileToken(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Me = socktest.Human()
+	app := humanApp(t, srv, nil)
+	writeConfig(t, app, fmt.Sprintf("token = %q\n", socktest.HumanToken))
+	if out, _ := mustRun(t, app, "account", "erase", "--confirm", "@guy"); out != "erased\n" {
+		t.Fatalf("got %q", out)
+	}
+	if fileToken(t, app) != "" {
+		t.Fatal("token kept after erase")
+	}
+}

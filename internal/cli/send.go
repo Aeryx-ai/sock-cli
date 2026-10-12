@@ -23,7 +23,7 @@ func newSendCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "send [text...]",
 		Short: "Send a message to your owner, or to --conversation",
-		Long:  "Send a message. Text comes from the arguments, or stdin when there are none. Without --conversation it goes to your owner (puppet tokens only).",
+		Long:  "Send a message. Text comes from the arguments, or stdin when there are none. Without --conversation it goes to your owner (puppet tokens only; a human must pass --conversation).",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			text, err := readText(args, cmd.InOrStdin(), app.StdinIsTTY())
 			if err != nil {
@@ -32,6 +32,9 @@ func newSendCmd(app *App) *cobra.Command {
 			c, err := app.clients()
 			if err != nil {
 				return err
+			}
+			if conversation == "" && app.human() {
+				return errors.New("a human must pass --conversation; without it send goes to a puppet's owner")
 			}
 			key := rand.Text() // one key per invocation, reused by every retry
 			msg, err := call(cmd.Context(), app, func(ctx context.Context) (*sockv1.Message, error) {

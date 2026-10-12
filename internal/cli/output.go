@@ -30,7 +30,7 @@ func (p Printer) Message(w io.Writer, m *sockv1.Message) error {
 		return p.json(w, m)
 	}
 	_, err := fmt.Fprintf(w, "%s  %s #%d  %s: %s\n",
-		m.GetSentAt().AsTime().Local().Format(time.DateTime),
+		localTime(m.GetSentAt()),
 		m.GetConversationId(), m.GetSeq(), m.GetSenderId(), m.GetText())
 	return err
 }
@@ -63,5 +63,43 @@ func (p Printer) Conversation(w io.Writer, c *sockv1.Conversation) error {
 		kind = "direct"
 	}
 	_, err := fmt.Fprintf(w, "%s  %s  members %s\n", c.GetId(), kind, strings.Join(c.GetMemberIds(), ","))
+	return err
+}
+
+// localTime formats a server timestamp in the local zone.
+func localTime(ts interface{ AsTime() time.Time }) string {
+	return ts.AsTime().Local().Format(time.DateTime)
+}
+
+// Device prints one device; this marks the calling device. indent prefixes
+// the text line (puppet devices under their puppet).
+func (p Printer) Device(w io.Writer, d *sockv1.Device, this bool, indent string) error {
+	if p.JSON {
+		return p.json(w, d)
+	}
+	mark := ""
+	if this {
+		mark = "  (this)"
+	}
+	_, err := fmt.Fprintf(w, "%s%s  %s  created %s%s\n", indent, d.GetId(), d.GetLabel(), localTime(d.GetCreatedAt()), mark)
+	return err
+}
+
+// Blocked prints one blocked account.
+func (p Printer) Blocked(w io.Writer, b *sockv1.BlockedAccount) error {
+	if p.JSON {
+		return p.json(w, b)
+	}
+	_, err := fmt.Fprintf(w, "%s  blocked %s\n", b.GetAccountId(), localTime(b.GetBlockedAt()))
+	return err
+}
+
+// Done prints a command's confirmation: the response message with --json,
+// else text.
+func (p Printer) Done(w io.Writer, res proto.Message, text string) error {
+	if p.JSON {
+		return p.json(w, res)
+	}
+	_, err := fmt.Fprintln(w, text)
 	return err
 }

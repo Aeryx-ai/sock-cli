@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
 	"github.com/guygrigsby/sock-cli/internal/config"
@@ -140,6 +141,21 @@ func NewRoot(app *App) *cobra.Command {
 	pf.StringVar(&app.flagToken, "token", "", "bearer token (default $SOCK_TOKEN; a flag is visible in ps, prefer the env var)")
 	pf.BoolVar(&app.jsonOut, "json", false, "print as JSON lines")
 	root.AddCommand(newLoginCmd(app), newRegisterCmd(app), newLogoutCmd(app),
-		newWhoamiCmd(app), newSendCmd(app), newFetchCmd(app), newConversationsCmd(app), newListenCmd(app))
+		newWhoamiCmd(app), newTermsCmd(app), newNameCmd(app), newHandleCmd(app), newAccountsCmd(app), newAccountCmd(app),
+		newDevicesCmd(app), newPuppetsCmd(app),
+		newConversationsCmd(app), newSendCmd(app), newListenCmd(app), newFetchCmd(app), newAckCmd(app),
+		newBlockCmd(app), newUnblockCmd(app), newBlocksCmd(app), newReportCmd(app), newExportCmd(app))
 	return root
+}
+
+// unary runs one unary RPC through call, building a fresh request per
+// attempt.
+func unary[Req, Res any](ctx context.Context, a *App, fn func(context.Context, *connect.Request[Req]) (*connect.Response[Res], error), req *Req) (*Res, error) {
+	return call(ctx, a, func(ctx context.Context) (*Res, error) {
+		res, err := fn(ctx, connect.NewRequest(req))
+		if err != nil {
+			return nil, err
+		}
+		return res.Msg, nil
+	})
 }
