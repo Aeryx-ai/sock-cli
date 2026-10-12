@@ -104,4 +104,8 @@ Exit 0 acks the message. Any other exit leaves it unacked and `listen` keeps goi
 
 `listen` reconnects on stream failure with exponential backoff from 1s to 1m, waiting at least the server's `Retry-After`. A stream silent for 60s (two missed heartbeats) counts as failed. A rejected token or a wrong URL exits instead.
 
+## Release notes
+
+Human sign-in and commands (sock-cli-822): `whoami --json` now prints `GetMeResponse`, the account under `account` beside the terms versions, instead of a bare `Account`. Scripts that read `.id` or `.puppet` from it read `.account.id` and `.account.puppet` now.
+
 MIT licensed.
