@@ -12,12 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/guygrigsby/sock-cli/internal/client"
 	"github.com/guygrigsby/sock-cli/internal/config"
+	"github.com/guygrigsby/sock-client"
 )
-
-// unaryTimeout bounds each unary call; Subscribe has no deadline.
-const unaryTimeout = 30 * time.Second
 
 // App holds everything commands depend on, so tests can substitute any of it.
 type App struct {
@@ -91,7 +88,7 @@ func (a *App) clients() (client.Clients, error) {
 	if err != nil {
 		return client.Clients{}, err
 	}
-	return client.New(cfg, a.Version), nil
+	return client.New(cfg, "sock-cli/"+a.Version), nil
 }
 
 func (a *App) printer() Printer { return Printer{JSON: a.jsonOut} }
@@ -99,15 +96,7 @@ func (a *App) printer() Printer { return Printer{JSON: a.jsonOut} }
 // call runs one unary RPC with retries on transient failures, a per-attempt
 // timeout, and errors rewritten into actionable text.
 func call[T any](ctx context.Context, a *App, fn func(context.Context) (T, error)) (T, error) {
-	var out T
-	err := a.Retrier.Do(ctx, func(ctx context.Context) error {
-		ctx, cancel := context.WithTimeout(ctx, unaryTimeout)
-		defer cancel()
-		var err error
-		out, err = fn(ctx)
-		return err
-	})
-	return out, client.Describe(err)
+	return client.Call(ctx, a.Retrier, fn)
 }
 
 // NewRoot builds the command tree.

@@ -21,8 +21,8 @@ import (
 
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 
-	"github.com/guygrigsby/sock-cli/internal/client"
 	"github.com/guygrigsby/sock-cli/internal/socktest"
+	"github.com/guygrigsby/sock-client"
 )
 
 // run executes the root command with args and returns what it printed.
