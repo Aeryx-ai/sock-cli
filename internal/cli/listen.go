@@ -25,6 +25,9 @@ const (
 	heartbeatInterval = 30 * time.Second
 	// defaultListenIdle tolerates one missed heartbeat.
 	defaultListenIdle = 2 * heartbeatInterval
+	// execAttempts is how many times a message's --exec command runs on the
+	// current stream before the message is left pending for a reconnect.
+	execAttempts = 5
 )
 
 // errStreamIdle marks a stream that went silent past the idle limit,
@@ -38,7 +41,7 @@ func newListenCmd(app *App) *cobra.Command {
 		Use:   "listen",
 		Short: "Stream messages as they arrive and acknowledge each one",
 		Long: "Stream pending and new messages. Each is printed (or passed to --exec on stdin as JSON) and then acknowledged. " +
-			"With --exec, a message is acknowledged only if the command exits 0; delivery is at-least-once, so the command may see a message twice.",
+			"With --exec, a message is acknowledged only if the command exits 0; a failing command is retried up to 5 times with backoff, then the message stays pending for the next connection. Delivery is at-least-once, so the command may see a message twice.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := app.clients()
@@ -170,11 +173,34 @@ func (l *listener) handle(ctx context.Context, m *sockv1.Message) error {
 			"SOCK_CONVERSATION_ID=" + m.GetConversationId(),
 			"SOCK_SENDER_ID=" + m.GetSenderId(),
 		}
-		if err := l.app.RunExec(ctx, l.exec, payload, env, l.out, l.errOut); err != nil {
+		if err := l.runExec(ctx, m.GetId(), payload, env); err != nil {
 			return fmt.Errorf("--exec failed: %w (not acked)", err)
 		}
 	}
 	return ack(ctx, l.app, l.clients, []string{m.GetId()})
+}
+
+// runExec runs the --exec command, retrying a failure up to execAttempts
+// times with the reconnect backoff. Messages are handled in order, so a
+// message that still fails holds the stream for the retries and is then left
+// pending; it comes back on the next connection.
+func (l *listener) runExec(ctx context.Context, id string, payload []byte, env []string) error {
+	backoff := reconnectBase
+	for attempt := 1; ; attempt++ {
+		err := l.app.RunExec(ctx, l.exec, payload, env, l.out, l.errOut)
+		if err == nil || attempt == execAttempts || ctx.Err() != nil {
+			return err
+		}
+		wait := backoff
+		if l.app.Jitter != nil {
+			wait = l.app.Jitter(backoff)
+		}
+		l.logf("message %s: --exec failed: %v; retrying in %s", id, err, wait)
+		if l.app.Sleep(ctx, wait) != nil {
+			return err
+		}
+		backoff = min(backoff*2, reconnectMax)
+	}
 }
 
 // reconnectable reports whether a stream failure is worth reconnecting

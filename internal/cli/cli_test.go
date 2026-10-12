@@ -623,6 +623,42 @@ func TestListenStopsOnWrongURL(t *testing.T) {
 	}
 }
 
+// A failed --exec is retried on the same stream with backoff; it does not
+// wait for a reconnect that a healthy stream never needs.
+func TestListenExecRetriesInProcess(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{{
+		Events: []*sockv1.SubscribeResponse{socktest.Event(socktest.Text("m-1", "c-1", 1, "flaky"))},
+		Hold:   true,
+	}}
+	app := testApp(t, srv)
+	waits := recordSleeps(&app.Sleep)
+	var calls atomic.Int32
+	app.RunExec = func(context.Context, string, []byte, []string, io.Writer, io.Writer) error {
+		if calls.Add(1) < 3 {
+			return errors.New("exit status 1")
+		}
+		return nil
+	}
+	acked := ackedCount(srv)
+	_, errOut, err := listenUntil(t, app, func() bool { return acked() == 1 }, "--exec", "handle-it")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("exec ran %d times, want 3", calls.Load())
+	}
+	if _, _, _, subs := srv.Snapshot(); subs != 1 {
+		t.Fatalf("subscribes %d, want 1: the retry must not need a reconnect", subs)
+	}
+	if w := waits(); len(w) != 2 || w[0] != time.Second || w[1] != 2*time.Second {
+		t.Fatalf("waits %v", w)
+	}
+	if !strings.Contains(errOut, "retrying") {
+		t.Fatalf("stderr %q", errOut)
+	}
+}
+
 func TestListenExecAcksOnlyOnSuccess(t *testing.T) {
 	srv := socktest.New(t)
 	srv.Streams = []socktest.StreamScript{{
@@ -648,6 +684,7 @@ func TestListenExecAcksOnlyOnSuccess(t *testing.T) {
 		}
 		return nil
 	}
+	recordSleeps(&app.Sleep)
 	acked := ackedCount(srv)
 	_, errOut, err := listenUntil(t, app, func() bool { return acked() == 1 }, "--exec", "handle-it")
 	if err != nil {
@@ -662,7 +699,8 @@ func TestListenExecAcksOnlyOnSuccess(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(seen) != 2 || !strings.Contains(seen[1], "SOCK_MESSAGE_ID=m-ok") || !strings.Contains(seen[1], "SOCK_CONVERSATION_ID=c-1") || !strings.Contains(seen[1], "|handle-it|") {
+	// m-fail is attempted execAttempts times, then m-ok runs once
+	if last := seen[len(seen)-1]; len(seen) != execAttempts+1 || !strings.Contains(last, "SOCK_MESSAGE_ID=m-ok") || !strings.Contains(last, "SOCK_CONVERSATION_ID=c-1") || !strings.Contains(last, "|handle-it|") {
 		t.Fatalf("exec calls %v", seen)
 	}
 }

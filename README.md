@@ -100,7 +100,7 @@ An `<account>` is an account id or `@handle`.
 
 The command inherits the rest of the environment, including `SOCK_TOKEN` when set, so it can reply with `sock send`.
 
-Exit 0 acks the message. Any other exit leaves it unacked and `listen` keeps going with the next one. The unacked message is not retried on the same connection: it is redelivered after the stream reconnects. Delivery is at-least-once, so make the command idempotent and key on `SOCK_MESSAGE_ID`.
+Exit 0 acks the message. Any other exit is retried on the same connection, up to 5 runs in all with backoff from 1s to 1m. A message that still fails is left unacked, `listen` moves on to the next one, and the message is redelivered after the stream reconnects. Messages run in order, so retries delay the ones behind. Delivery is at-least-once, so make the command idempotent and key on `SOCK_MESSAGE_ID`.
 
 `listen` reconnects on stream failure with exponential backoff from 1s to 1m, waiting at least the server's `Retry-After`. A stream silent for 60s (two missed heartbeats) counts as failed. A rejected token or a wrong URL exits instead.
 
