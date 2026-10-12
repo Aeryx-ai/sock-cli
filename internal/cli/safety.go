@@ -174,7 +174,7 @@ func readEvidence(path string) ([]*sockv1.ReportedMessage, error) {
 			return nil, fmt.Errorf("--evidence line %d is not a message as sock fetch --json prints it: %w", n, err)
 		}
 		if len(m.GetEvidenceTag()) == 0 {
-			return nil, fmt.Errorf("--evidence line %d has no evidence_tag; use the line exactly as sock fetch --json printed it", n)
+			return nil, fmt.Errorf("--evidence line %d has no evidenceTag; use the line exactly as sock fetch --json printed it", n)
 		}
 		out = append(out, &sockv1.ReportedMessage{
 			MessageId:      m.GetId(),
