@@ -149,11 +149,23 @@ func FileToken(path string) (string, error) {
 	return strings.TrimSpace(f.Token), nil
 }
 
-// SetToken writes token into the config file, keeping every other key. The
-// directory is made 0700 and the file 0600, written to a temporary file and
-// renamed so a crash never leaves a half-written file.
-func SetToken(path, token string) error {
-	return rewrite(path, func(m map[string]any) { m["token"] = token })
+// ErrTokenExists means the config file already holds a token.
+var ErrTokenExists = errors.New("config file already holds a token")
+
+// SetNewToken writes token into the config file, keeping every other key,
+// and refuses with ErrTokenExists when the file already holds a token. The
+// check runs on the file as read for the rewrite, so a token written since
+// an earlier check is never lost. The directory is made 0700 and the file
+// 0600, written to a temporary file and renamed so a crash never leaves a
+// half-written file.
+func SetNewToken(path, token string) error {
+	return rewrite(path, func(m map[string]any) error {
+		if s, _ := m["token"].(string); strings.TrimSpace(s) != "" {
+			return ErrTokenExists
+		}
+		m["token"] = token
+		return nil
+	})
 }
 
 // RemoveToken deletes the token from the config file, keeping every other
@@ -162,10 +174,13 @@ func RemoveToken(path string) error {
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	return rewrite(path, func(m map[string]any) { delete(m, "token") })
+	return rewrite(path, func(m map[string]any) error {
+		delete(m, "token")
+		return nil
+	})
 }
 
-func rewrite(path string, edit func(map[string]any)) error {
+func rewrite(path string, edit func(map[string]any) error) error {
 	if path == "" {
 		return errors.New("config: no config path: set XDG_CONFIG_HOME or HOME")
 	}
@@ -173,7 +188,9 @@ func rewrite(path string, edit func(map[string]any)) error {
 	if _, err := toml.DecodeFile(path, &m); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
-	edit(m)
+	if err := edit(m); err != nil {
+		return err
+	}
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
 		return fmt.Errorf("config: encode: %w", err)

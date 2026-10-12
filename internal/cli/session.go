@@ -133,7 +133,7 @@ func (a *App) signIn(cmd *cobra.Command, f signInFlags, rpc signInRPC) error {
 	if existing, err := config.FileToken(a.ConfigPath); err != nil {
 		return err
 	} else if existing != "" {
-		return fmt.Errorf("%s already holds a token; run sock logout first, or keep a copy of a puppet token (it is shown only once) and remove it, or set XDG_CONFIG_HOME to use another config", a.ConfigPath)
+		return a.tokenExists()
 	}
 	label, err := a.deviceLabel(f.label)
 	if err != nil {
@@ -163,7 +163,10 @@ func (a *App) signIn(cmd *cobra.Command, f signInFlags, rpc signInRPC) error {
 	if !strings.HasPrefix(session.GetToken(), humanTokenPrefix) {
 		return errors.New("the server returned no session token")
 	}
-	if err := config.SetToken(a.ConfigPath, session.GetToken()); err != nil {
+	if err := config.SetNewToken(a.ConfigPath, session.GetToken()); errors.Is(err, config.ErrTokenExists) {
+		// A token arrived in the file during the browser wait: keep it.
+		return fmt.Errorf("%w; the new session (device %s) was not saved, revoke it with sock devices revoke", a.tokenExists(), session.GetDevice().GetId())
+	} else if err != nil {
 		return fmt.Errorf("signed in, but saving the token failed (%w); revoke device %s with sock devices revoke from another session", err, session.GetDevice().GetId())
 	}
 	session.Token = ""
@@ -172,6 +175,12 @@ func (a *App) signIn(cmd *cobra.Command, f signInFlags, rpc signInRPC) error {
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "signed in as @%s on device %s\n", session.GetAccount().GetHuman().GetHandle(), session.GetDevice().GetId())
 	return err
+}
+
+// tokenExists is the refusal to overwrite the config file's token: a puppet
+// token there is shown only once.
+func (a *App) tokenExists() error {
+	return fmt.Errorf("%s already holds a token; run sock logout first, or keep a copy of a puppet token (it is shown only once) and remove it, or set XDG_CONFIG_HOME to use another config", a.ConfigPath)
 }
 
 // deviceLabel is the flag's label, else "sock CLI on <hostname>" cut to

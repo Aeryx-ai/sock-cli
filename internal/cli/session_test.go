@@ -432,3 +432,20 @@ func TestLogoutWithoutToken(t *testing.T) {
 		t.Fatal("logout with no token succeeded")
 	}
 }
+
+func TestLoginKeepsTokenWrittenDuringTheWait(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	b := withBrowser(t, app, srv)
+	app.OpenBrowser = func(u string) error {
+		writeConfig(t, app, "token = \"sock_pt_written_meanwhile\"\n")
+		return b.open(u)
+	}
+	_, _, err := run(t, app, nil, "login")
+	if err == nil || !strings.Contains(err.Error(), "already holds a token") {
+		t.Fatalf("got %v", err)
+	}
+	if fileToken(t, app) != "sock_pt_written_meanwhile" {
+		t.Fatal("token written during the wait was overwritten")
+	}
+}
