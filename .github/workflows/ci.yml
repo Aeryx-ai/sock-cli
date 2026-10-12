@@ -15,6 +15,11 @@ jobs:
           repository: guygrigsby/sock-contract
           path: contract
           ssh-key: ${{ secrets.CONTRACT_DEPLOY_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          repository: guygrigsby/sock-client
+          path: client
+          ssh-key: ${{ secrets.CLIENT_DEPLOY_KEY }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: cli/go.mod
