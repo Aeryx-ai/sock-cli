@@ -36,6 +36,14 @@ type App struct {
 	// RunExec runs a listen --exec command with the message on stdin.
 	RunExec func(ctx context.Context, cmdline string, stdin []byte, env []string, stdout, stderr io.Writer) error
 
+	// OpenBrowser opens a URL in the person's browser (sock login).
+	OpenBrowser func(url string) error
+	// Hostname names this machine in the default device label.
+	Hostname func() (string, error)
+	// LoginTimeout bounds the wait for the browser sign-in. Zero means
+	// login.DefaultTimeout.
+	LoginTimeout time.Duration
+
 	flagURL   string
 	flagToken string
 	jsonOut   bool
@@ -58,10 +66,12 @@ func DefaultApp(version string) *App {
 			fi, err := os.Stdin.Stat()
 			return err == nil && fi.Mode()&os.ModeCharDevice != 0
 		},
-		Retrier: client.DefaultRetrier(),
-		Sleep:   client.SleepCtx,
-		Jitter:  equalJitter,
-		RunExec: runShell,
+		Retrier:     client.DefaultRetrier(),
+		Sleep:       client.SleepCtx,
+		Jitter:      equalJitter,
+		RunExec:     runShell,
+		OpenBrowser: openBrowser,
+		Hostname:    os.Hostname,
 	}
 }
 
@@ -129,6 +139,7 @@ func NewRoot(app *App) *cobra.Command {
 	pf.StringVar(&app.flagURL, "url", "", "server URL (default $SOCK_URL, then "+config.DefaultURL+")")
 	pf.StringVar(&app.flagToken, "token", "", "bearer token (default $SOCK_TOKEN; a flag is visible in ps, prefer the env var)")
 	pf.BoolVar(&app.jsonOut, "json", false, "print as JSON lines")
-	root.AddCommand(newWhoamiCmd(app), newSendCmd(app), newFetchCmd(app), newConversationsCmd(app), newListenCmd(app))
+	root.AddCommand(newLoginCmd(app), newRegisterCmd(app), newLogoutCmd(app),
+		newWhoamiCmd(app), newSendCmd(app), newFetchCmd(app), newConversationsCmd(app), newListenCmd(app))
 	return root
 }
