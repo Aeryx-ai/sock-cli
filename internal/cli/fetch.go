@@ -9,8 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
-
-	"github.com/guygrigsby/sock-client"
 )
 
 // fetchBatch is the FetchPending limit per call (spec allows 1 to 500).
@@ -73,7 +71,7 @@ func newFetchCmd(app *App) *cobra.Command {
 }
 
 // ack acknowledges ids, retrying transient failures. Acks are idempotent.
-func ack(ctx context.Context, app *App, c client.Clients, ids []string) error {
+func ack(ctx context.Context, app *App, c Clients, ids []string) error {
 	_, err := call(ctx, app, func(ctx context.Context) (struct{}, error) {
 		_, err := c.Messaging.Ack(ctx, connect.NewRequest(&sockv1.AckRequest{MessageIds: ids}))
 		return struct{}{}, err

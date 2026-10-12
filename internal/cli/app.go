@@ -8,12 +8,13 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/guygrigsby/sock-cli/internal/config"
-	"github.com/guygrigsby/sock-client"
+	client "github.com/guygrigsby/sock-client"
 )
 
 // App holds everything commands depend on, so tests can substitute any of it.
@@ -38,6 +39,9 @@ type App struct {
 	flagURL   string
 	flagToken string
 	jsonOut   bool
+	// token is the one the last clients() call resolved; it decides whether
+	// errors are worded for a human or a puppet.
+	token string
 }
 
 // DefaultApp wires the real environment.
@@ -78,25 +82,38 @@ func runShell(ctx context.Context, cmdline string, stdin []byte, env []string, s
 	return cmd.Run()
 }
 
-func (a *App) clients() (client.Clients, error) {
-	cfg, err := config.Load(config.Sources{
+func (a *App) load(anonymous bool) (config.Config, error) {
+	return config.Load(config.Sources{
 		FlagURL:   a.flagURL,
 		FlagToken: a.flagToken,
 		Getenv:    a.Getenv,
 		Path:      a.ConfigPath,
+		Anonymous: anonymous,
 	})
-	if err != nil {
-		return client.Clients{}, err
-	}
-	return client.New(cfg, "sock-cli/"+a.Version), nil
 }
+
+func (a *App) userAgent() string { return "sock-cli/" + a.Version }
+
+// clients loads the config, which must hold a token, and builds clients.
+func (a *App) clients() (Clients, error) {
+	cfg, err := a.load(false)
+	if err != nil {
+		return Clients{}, err
+	}
+	a.token = cfg.Token
+	return newClients(cfg, a.userAgent()), nil
+}
+
+// human reports whether the resolved token is a human session.
+func (a *App) human() bool { return strings.HasPrefix(a.token, humanTokenPrefix) }
 
 func (a *App) printer() Printer { return Printer{JSON: a.jsonOut} }
 
 // call runs one unary RPC with retries on transient failures, a per-attempt
 // timeout, and errors rewritten into actionable text.
 func call[T any](ctx context.Context, a *App, fn func(context.Context) (T, error)) (T, error) {
-	return client.Call(ctx, a.Retrier, fn)
+	out, err := client.Call(ctx, a.Retrier, fn)
+	return out, a.describe(err)
 }
 
 // NewRoot builds the command tree.

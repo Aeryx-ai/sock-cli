@@ -175,3 +175,115 @@ func TestInternalWhitespaceTokenNotEchoed(t *testing.T) {
 		t.Fatalf("want an error that does not echo the token, got %v", err)
 	}
 }
+
+func TestAccessGateEnvOverFile(t *testing.T) {
+	p := writeFile(t, 0o600, "access_gate = \"file-gate\"\n")
+	got, err := Load(Sources{Getenv: env(map[string]string{"SOCK_TOKEN": tok}), Path: p})
+	if err != nil || got.AccessGate != "file-gate" {
+		t.Fatalf("file: got %+v, %v", got, err)
+	}
+	got, err = Load(Sources{Getenv: env(map[string]string{"SOCK_TOKEN": tok, "SOCK_ACCESS_GATE": " env-gate\n"}), Path: p})
+	if err != nil || got.AccessGate != "env-gate" {
+		t.Fatalf("env: got %+v, %v", got, err)
+	}
+	got, err = Load(Sources{Getenv: env(map[string]string{"SOCK_TOKEN": tok}), Path: filepath.Join(t.TempDir(), "none")})
+	if err != nil || got.AccessGate != "" {
+		t.Fatalf("unset: got %+v, %v", got, err)
+	}
+}
+
+func TestAccessGateFileReadableByOthersRefused(t *testing.T) {
+	p := writeFile(t, 0o644, "access_gate = \"hunter2\"\n")
+	_, err := Load(Sources{Getenv: env(map[string]string{"SOCK_TOKEN": tok}), Path: p})
+	if err == nil || !strings.Contains(err.Error(), "chmod 600") || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("want chmod refusal without echo, got %v", err)
+	}
+}
+
+func TestAccessGateWithControlCharactersRefusedWithoutEcho(t *testing.T) {
+	_, err := Load(Sources{Getenv: env(map[string]string{"SOCK_TOKEN": tok, "SOCK_ACCESS_GATE": "hunter2\r\nX-Evil: 1"}), Path: filepath.Join(t.TempDir(), "none")})
+	if err == nil || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("want refusal without echo, got %v", err)
+	}
+}
+
+func TestAnonymousLoadNeedsNoToken(t *testing.T) {
+	got, err := Load(Sources{Anonymous: true, Getenv: env(nil), Path: filepath.Join(t.TempDir(), "none")})
+	if err != nil || got.URL != DefaultURL || got.Token != "" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if _, err := Load(Sources{Anonymous: true, FlagURL: "http://x.example", Getenv: env(nil)}); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Fatalf("anonymous load skipped URL validation: %v", err)
+	}
+}
+
+func TestSetTokenWritesPrivateFileKeepingOtherKeys(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sock")
+	p := filepath.Join(dir, "config.toml")
+	if err := SetToken(p, "sock_st_dev_secret"); err != nil {
+		t.Fatalf("SetToken new: %v", err)
+	}
+	assertMode(t, dir, 0o700)
+	assertMode(t, p, 0o600)
+	if err := os.WriteFile(p, []byte("url = \"https://x.example\"\naccess_gate = \"g\"\nextra = 3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetToken(p, "sock_st_dev_secret"); err != nil {
+		t.Fatalf("SetToken existing: %v", err)
+	}
+	assertMode(t, p, 0o600)
+	got, err := Load(Sources{Getenv: env(nil), Path: p})
+	if err != nil || got.URL != "https://x.example" || got.Token != "sock_st_dev_secret" || got.AccessGate != "g" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil || !strings.Contains(string(b), "extra = 3") {
+		t.Fatalf("unknown key lost: %q, %v", b, err)
+	}
+	if tok, err := FileToken(p); err != nil || tok != "sock_st_dev_secret" {
+		t.Fatalf("FileToken %q, %v", tok, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("temporary files left behind: %v, %v", entries, err)
+	}
+}
+
+func TestSetTokenTightensExistingDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sock")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetToken(filepath.Join(dir, "config.toml"), "sock_st_dev_secret"); err != nil {
+		t.Fatal(err)
+	}
+	assertMode(t, dir, 0o700)
+}
+
+func TestRemoveTokenKeepsURL(t *testing.T) {
+	p := writeFile(t, 0o600, "url = \"https://x.example\"\ntoken = \"sock_st_dev_secret\"\n")
+	if err := RemoveToken(p); err != nil {
+		t.Fatalf("RemoveToken: %v", err)
+	}
+	if tok, err := FileToken(p); err != nil || tok != "" {
+		t.Fatalf("token left: %q, %v", tok, err)
+	}
+	got, err := Load(Sources{Anonymous: true, Getenv: env(nil), Path: p})
+	if err != nil || got.URL != "https://x.example" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if err := RemoveToken(filepath.Join(t.TempDir(), "none.toml")); err != nil {
+		t.Fatalf("missing file: %v", err)
+	}
+}
+
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != want {
+		t.Fatalf("%s mode %o, want %o", path, fi.Mode().Perm(), want)
+	}
+}

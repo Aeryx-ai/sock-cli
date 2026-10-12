@@ -1,14 +1,17 @@
-// Package config resolves the server URL and token: flag, then env, then
-// file, then DefaultURL for the URL.
+// Package config resolves the server URL, token and access gate: flag, then
+// env, then file, then DefaultURL for the URL. It also writes the token that
+// sock login and sock register obtain.
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 
@@ -19,7 +22,12 @@ import (
 const DefaultURL = client.DefaultURL
 
 // Config is what every command needs to reach the server.
-type Config = client.Config
+type Config struct {
+	client.Config
+	// AccessGate, when set, is sent as the Sock-Access-Gate header to the
+	// configured server only (staging sits behind it).
+	AccessGate string
+}
 
 // Sources are the inputs to Load, injectable for tests.
 type Sources struct {
@@ -28,11 +36,15 @@ type Sources struct {
 	Getenv    func(string) string
 	// Path is the config file. A missing file is not an error.
 	Path string
+	// Anonymous skips the token requirement, for sock login and sock
+	// register, which run before a token exists.
+	Anonymous bool
 }
 
 type file struct {
-	URL   string `toml:"url"`
-	Token string `toml:"token"`
+	URL        string `toml:"url"`
+	Token      string `toml:"token"`
+	AccessGate string `toml:"access_gate"`
 }
 
 // DefaultPath is $XDG_CONFIG_HOME/sock/config.toml, else ~/.config/sock/config.toml.
@@ -49,7 +61,7 @@ func DefaultPath(getenv func(string) string) (string, error) {
 
 // Load resolves and validates the config.
 func Load(s Sources) (Config, error) {
-	c := Config{URL: DefaultURL}
+	c := Config{Config: client.Config{URL: DefaultURL}}
 	f, err := readFile(s.Path)
 	if err != nil {
 		return Config{}, err
@@ -58,11 +70,15 @@ func Load(s Sources) (Config, error) {
 		c.URL = f.URL
 	}
 	c.Token = f.Token
+	c.AccessGate = f.AccessGate
 	if v := s.Getenv("SOCK_URL"); v != "" {
 		c.URL = v
 	}
 	if v := s.Getenv("SOCK_TOKEN"); v != "" {
 		c.Token = v
+	}
+	if v := s.Getenv("SOCK_ACCESS_GATE"); v != "" {
+		c.AccessGate = v
 	}
 	if s.FlagURL != "" {
 		c.URL = s.FlagURL
@@ -70,9 +86,10 @@ func Load(s Sources) (Config, error) {
 	if s.FlagToken != "" {
 		c.Token = s.FlagToken
 	}
-	// A trailing newline from a secret file or `$(cat ...)` is not part of the token.
+	// A trailing newline from a secret file or `$(cat ...)` is not part of the value.
 	c.Token = strings.TrimSpace(c.Token)
-	if err := validate(c); err != nil {
+	c.AccessGate = strings.TrimSpace(c.AccessGate)
+	if err := validate(c, s.Anonymous); err != nil {
 		return Config{}, err
 	}
 	return c, nil
@@ -93,19 +110,100 @@ func readFile(path string) (file, error) {
 	if _, err := toml.DecodeFile(path, &f); err != nil {
 		return f, fmt.Errorf("config: parse %s: %w", path, err)
 	}
-	if f.Token != "" && info.Mode().Perm()&0o077 != 0 {
-		return file{}, fmt.Errorf("config: %s holds a token but is readable by others (mode %o); run chmod 600 %s", path, info.Mode().Perm(), path)
+	if (f.Token != "" || f.AccessGate != "") && info.Mode().Perm()&0o077 != 0 {
+		return file{}, fmt.Errorf("config: %s holds a secret but is readable by others (mode %o); run chmod 600 %s", path, info.Mode().Perm(), path)
 	}
 	return f, nil
 }
 
-func validate(c Config) error {
+// anonymousToken stands in for the token when an anonymous load validates
+// the URL with the shared rules, which check a token too.
+const anonymousToken = "sock_st_anonymous"
+
+func validate(c Config, anonymous bool) error {
 	// The CLI names its own sources in these two hints.
 	if c.URL == "" {
 		return errors.New("no server URL: set SOCK_URL, --url, or url in the config file")
 	}
-	if c.Token == "" {
-		return errors.New("no token: set SOCK_TOKEN, --token, or token in the config file")
+	if strings.ContainsFunc(c.AccessGate, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return errors.New("access gate contains whitespace or control characters; check SOCK_ACCESS_GATE or access_gate in the config file")
 	}
-	return client.Validate(c)
+	if anonymous && c.Token == "" {
+		cc := c.Config
+		cc.Token = anonymousToken
+		return client.Validate(cc)
+	}
+	if c.Token == "" {
+		return errors.New("no token: run sock login, or set SOCK_TOKEN, --token, or token in the config file")
+	}
+	return client.Validate(c.Config)
+}
+
+// FileToken returns the token the config file holds, or "" when it holds
+// none or does not exist.
+func FileToken(path string) (string, error) {
+	f, err := readFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(f.Token), nil
+}
+
+// SetToken writes token into the config file, keeping every other key. The
+// directory is made 0700 and the file 0600, written to a temporary file and
+// renamed so a crash never leaves a half-written file.
+func SetToken(path, token string) error {
+	return rewrite(path, func(m map[string]any) { m["token"] = token })
+}
+
+// RemoveToken deletes the token from the config file, keeping every other
+// key. A missing file is not an error.
+func RemoveToken(path string) error {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return rewrite(path, func(m map[string]any) { delete(m, "token") })
+}
+
+func rewrite(path string, edit func(map[string]any)) error {
+	if path == "" {
+		return errors.New("config: no config path: set XDG_CONFIG_HOME or HOME")
+	}
+	m := map[string]any{}
+	if _, err := toml.DecodeFile(path, &m); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	edit(m)
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
+		return fmt.Errorf("config: encode: %w", err)
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// sock's own directory: tighten it if it was created looser.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, ".config-*.toml") // created 0600
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }() // no-op after the rename
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("config: write %s: %w", tmp.Name(), err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("config: sync %s: %w", tmp.Name(), err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("config: close %s: %w", tmp.Name(), err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("config: replace %s: %w", path, err)
+	}
+	return nil
 }

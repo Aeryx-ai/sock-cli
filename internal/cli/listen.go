@@ -14,7 +14,7 @@ import (
 
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 
-	"github.com/guygrigsby/sock-client"
+	client "github.com/guygrigsby/sock-client"
 )
 
 const (
@@ -59,7 +59,7 @@ func newListenCmd(app *App) *cobra.Command {
 
 type listener struct {
 	app     *App
-	clients client.Clients
+	clients Clients
 	printer Printer
 	exec    string
 	idle    time.Duration
@@ -81,7 +81,7 @@ func (l *listener) Run(ctx context.Context) error {
 			return nil
 		}
 		if err != nil && !reconnectable(err) {
-			return client.Describe(err)
+			return l.app.describe(client.Describe(err))
 		}
 		if received {
 			// The connection worked; the next failure is a fresh one.
@@ -93,7 +93,7 @@ func (l *listener) Run(ctx context.Context) error {
 			wait = l.app.Jitter(backoff)
 		}
 		if err != nil {
-			reason = client.Describe(err).Error()
+			reason = l.app.describe(client.Describe(err)).Error()
 			if ra, ok := client.RetryAfter(err, time.Now()); ok {
 				wait = min(max(wait, ra), reconnectMax)
 			}
