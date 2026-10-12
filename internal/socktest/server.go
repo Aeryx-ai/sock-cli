@@ -8,20 +8,39 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 	"github.com/guygrigsby/sock-contract/gen/go/sock/v1/sockv1connect"
 )
 
-// Token is the only bearer token the fake accepts.
+// Token is the puppet bearer token the fake accepts.
 const Token = "sock_pt_testdevice_testsecret"
+
+// HumanDeviceID is the device inside HumanToken.
+const HumanDeviceID = "0a0a0a0a-0000-4000-8000-000000000001"
+
+// HumanToken is the human session token the fake accepts and issues.
+const HumanToken = "sock_st_" + HumanDeviceID + "_humansecret"
+
+// anonymous are the methods the real server admits without a token.
+var anonymous = map[string]bool{"SignInWithApple": true, "RegisterWithApple": true}
+
+// Call is one unary request the fake received.
+type Call struct {
+	Method string // e.g. "SignInWithApple"
+	Msg    proto.Message
+	Header http.Header
+}
 
 // Sent records one NotifyOwner or Send call.
 type Sent struct {
@@ -67,8 +86,31 @@ type Server struct {
 	// Subscribes counts Subscribe calls.
 	Subscribes int
 
+	// Calls records every unary request, in order.
+	Calls []Call
+	// Fail makes a method (e.g. "SignInWithApple") return its error every
+	// time, after the call is recorded.
+	Fail map[string]error
+	// Session is what SignInWithApple and RegisterWithApple return.
+	Session *sockv1.Session
+	// AcceptedTerms and CurrentTerms are GetMe's terms versions.
+	AcceptedTerms, CurrentTerms string
+	// Accounts are what GetAccounts and LookupHandle search.
+	Accounts []*sockv1.Account
+	// Devices are ListDevices' answer; Puppets ListPuppets'; Blocked
+	// ListBlockedAccounts'.
+	Devices []*sockv1.Device
+	Puppets []*sockv1.PuppetWithDevices
+	Blocked []*sockv1.BlockedAccount
+
 	sockv1connect.UnimplementedIdentityServiceHandler
 	sockv1connect.UnimplementedMessagingServiceHandler
+	sockv1connect.UnimplementedModerationServiceHandler
+}
+
+// Human is the account HumanToken belongs to.
+func Human() *sockv1.Account {
+	return &sockv1.Account{Id: "human-1", DisplayName: "Guy", Kind: &sockv1.Account_Human{Human: &sockv1.Human{Handle: "guy"}}}
 }
 
 // New starts the fake and stops it when the test ends.
@@ -81,11 +123,20 @@ func New(t *testing.T) *Server {
 			Kind:        &sockv1.Account_Puppet{Puppet: &sockv1.Puppet{OwnerId: "human-1", Name: "build-bot"}},
 		},
 	}
+	s.Session = &sockv1.Session{
+		Account: Human(),
+		Device:  &sockv1.Device{Id: HumanDeviceID, AccountId: "human-1", Label: "sock CLI on test"},
+		Token:   HumanToken,
+	}
+	s.CurrentTerms, s.AcceptedTerms = "2026-10-11", "2026-10-11"
 	mux := http.NewServeMux()
-	idPath, idHandler := sockv1connect.NewIdentityServiceHandler(s)
-	msgPath, msgHandler := sockv1connect.NewMessagingServiceHandler(s)
+	opts := connect.WithInterceptors(connect.UnaryInterceptorFunc(s.intercept))
+	idPath, idHandler := sockv1connect.NewIdentityServiceHandler(s, opts)
+	msgPath, msgHandler := sockv1connect.NewMessagingServiceHandler(s, opts)
+	modPath, modHandler := sockv1connect.NewModerationServiceHandler(s, opts)
 	mux.Handle(idPath, s.auth(idHandler))
 	mux.Handle(msgPath, s.auth(msgHandler))
+	mux.Handle(modPath, s.auth(modHandler))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	s.URL = srv.URL
@@ -97,13 +148,51 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		s.mu.Lock()
 		s.UserAgents = append(s.UserAgents, r.Header.Get("User-Agent"))
 		s.mu.Unlock()
-		if r.Header.Get("Authorization") != "Bearer "+Token {
+		if anonymous[path.Base(r.URL.Path)] {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if a := r.Header.Get("Authorization"); a != "Bearer "+Token && a != "Bearer "+HumanToken {
 			err := withReason(connect.NewError(connect.CodeUnauthenticated, errors.New("token rejected")), sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID)
 			_ = connect.NewErrorWriter().Write(w, r, err)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// intercept records each unary call and applies Fail.
+func (s *Server) intercept(next connect.UnaryFunc) connect.UnaryFunc {
+	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		method := path.Base(req.Spec().Procedure)
+		s.mu.Lock()
+		msg, _ := req.Any().(proto.Message)
+		s.Calls = append(s.Calls, Call{Method: method, Msg: proto.Clone(msg), Header: req.Header().Clone()})
+		err := s.Fail[method]
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		return next(ctx, req)
+	}
+}
+
+// CallsTo returns the recorded requests to method.
+func (s *Server) CallsTo(method string) []Call {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Call
+	for _, c := range s.Calls {
+		if c.Method == method {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Error builds a refusal carrying reason, as the real server sends it.
+func Error(code connect.Code, reason sockv1.ErrorReason) error {
+	return withReason(connect.NewError(code, errors.New(strings.ToLower(reason.String()))), reason)
 }
 
 func withReason(ce *connect.Error, reason sockv1.ErrorReason) *connect.Error {
@@ -158,7 +247,7 @@ func Heartbeat() *sockv1.SubscribeResponse {
 func (s *Server) GetMe(_ context.Context, _ *connect.Request[sockv1.GetMeRequest]) (*connect.Response[sockv1.GetMeResponse], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return connect.NewResponse(&sockv1.GetMeResponse{Account: s.Me}), nil
+	return connect.NewResponse(&sockv1.GetMeResponse{Account: s.Me, AcceptedTermsVersion: s.AcceptedTerms, CurrentTermsVersion: s.CurrentTerms}), nil
 }
 
 // ListConversations implements the generated handler.
