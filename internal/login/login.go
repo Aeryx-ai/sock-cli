@@ -93,6 +93,9 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		timeout = DefaultTimeout
 	}
 	ln, err := listen(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(o.Port)))
+	if err != nil && o.Port != 0 {
+		return Result{}, fmt.Errorf("port %d is in use or cannot be bound on 127.0.0.1; pick another --port (%w)", o.Port, err)
+	}
 	if err != nil {
 		return Result{}, fmt.Errorf("listen on 127.0.0.1: %w", err)
 	}

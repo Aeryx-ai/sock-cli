@@ -284,8 +284,9 @@ func TestFixedPort(t *testing.T) {
 		t.Fatal(err)
 	}
 	busy := ln.Addr().(*net.TCPAddr).Port
-	if _, err := run(t, Options{Port: busy, Show: func(string) error { return nil }}); err == nil {
-		t.Fatal("bound a port already in use")
+	_, err = run(t, Options{Port: busy, Show: func(string) error { return nil }})
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("port %d is in use", busy)) || !strings.Contains(err.Error(), "--port") {
+		t.Fatalf("busy port: got %v", err)
 	}
 	_ = ln.Close()
 	var got int
