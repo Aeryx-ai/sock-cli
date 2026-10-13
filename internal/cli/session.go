@@ -144,10 +144,11 @@ func (a *App) signIn(cmd *cobra.Command, f signInFlags, rpc signInRPC) error {
 		warn(stderr, "SOCK_TOKEN is set and overrides the token sock login saves; unset it to use the new session")
 	}
 	res, err := login.Run(cmd.Context(), login.Options{
-		Hub:     cfg.URL,
-		Port:    f.port,
-		Timeout: a.LoginTimeout,
-		Show:    a.showLoginURL(stderr, f.noBrowser),
+		Hub:      cfg.URL,
+		Port:     f.port,
+		Timeout:  a.LoginTimeout,
+		Show:     a.showLoginURL(stderr, f.noBrowser),
+		Received: func() { warn(stderr, "sign-in received") },
 	})
 	if err != nil {
 		return err

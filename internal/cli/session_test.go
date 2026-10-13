@@ -449,3 +449,16 @@ func TestLoginKeepsTokenWrittenDuringTheWait(t *testing.T) {
 		t.Fatal("token written during the wait was overwritten")
 	}
 }
+
+func TestLoginSaysWhenTheCallbackArrives(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	_, errOut, err := run(t, app, nil, "login")
+	if err != nil {
+		t.Fatalf("login: %v, stderr %q", err, errOut)
+	}
+	if !strings.Contains(errOut, "sign-in received") {
+		t.Fatalf("stderr %q does not say the callback arrived", errOut)
+	}
+}

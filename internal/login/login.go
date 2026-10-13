@@ -43,6 +43,9 @@ type Options struct {
 	// Show presents the login URL to the person: opens a browser or prints
 	// it. An error aborts the run.
 	Show func(loginURL string) error
+	// Received, when set, is called once when the callback is accepted, so
+	// the person sees the sign-in arrived.
+	Received func()
 }
 
 // Result is what the sign-in RPC needs.
@@ -110,6 +113,8 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		nonce:  random(),
 		result: make(chan outcome, 1),
 		done:   make(chan struct{}),
+
+		received: o.Received,
 	}
 	loginURL, err := l.loginURL(o.Hub)
 	if err != nil {
@@ -169,6 +174,7 @@ type listener struct {
 	host, state, nonce string
 	result             chan outcome
 	done               chan struct{}
+	received           func()
 
 	mu       sync.Mutex
 	accepted bool
@@ -245,6 +251,9 @@ func (l *listener) callback(w http.ResponseWriter, r *http.Request) {
 	if !first {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
+	}
+	if l.received != nil {
+		l.received()
 	}
 	l.result <- out
 	http.Redirect(w, r, "/done", http.StatusSeeOther)
