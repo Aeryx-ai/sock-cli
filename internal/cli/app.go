@@ -4,6 +4,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"os"
@@ -25,6 +27,9 @@ type App struct {
 	ConfigPath string
 	StdinIsTTY func() bool
 	Retrier    client.Retrier
+	// RetryBudget bounds the time one call spends retrying, whatever the
+	// server's Retry-After says. Zero means defaultRetryBudget.
+	RetryBudget time.Duration
 	// Sleep is used between listen reconnects.
 	Sleep func(context.Context, time.Duration) error
 	// Jitter spreads a reconnect backoff so many clients do not retry in
@@ -123,9 +128,24 @@ func (a *App) printer() Printer { return Printer{JSON: a.jsonOut} }
 // call runs one unary RPC with retries on transient failures, a per-attempt
 // timeout, and errors rewritten into actionable text.
 func call[T any](ctx context.Context, a *App, fn func(context.Context) (T, error)) (T, error) {
-	out, err := client.Call(ctx, a.Retrier, fn)
+	budget := a.RetryBudget
+	if budget <= 0 {
+		budget = defaultRetryBudget
+	}
+	bctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	out, err := client.Call(bctx, a.Retrier, fn)
+	if ctx.Err() == nil && (client.Transient(err) || errors.Is(err, context.DeadlineExceeded) && bctx.Err() != nil) {
+		if bctx.Err() != nil {
+			return out, &rewritten{fmt.Sprintf("the server is unavailable: gave up after %s", budget), err}
+		}
+		return out, &rewritten{fmt.Sprintf("the server is unavailable: gave up after %d attempts (%s)", max(a.Retrier.Attempts, 1), err), err}
+	}
 	return out, a.describe(err)
 }
+
+// defaultRetryBudget is the longest one call keeps retrying.
+const defaultRetryBudget = 60 * time.Second
 
 // NewRoot builds the command tree.
 func NewRoot(app *App) *cobra.Command {

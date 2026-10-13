@@ -965,3 +965,33 @@ func TestListenAckFailureLogsAndKeepsStreaming(t *testing.T) {
 		t.Fatalf("stderr %q", errOut)
 	}
 }
+
+func TestSendSaysItGaveUpAfterTheAttempts(t *testing.T) {
+	srv := socktest.New(t)
+	for range 6 {
+		srv.SendErrs = append(srv.SendErrs, socktest.Unavailable())
+	}
+	app := testApp(t, srv)
+	_, _, err := run(t, app, nil, "send", "hi")
+	if err == nil || !strings.Contains(err.Error(), "gave up after 6 attempts") {
+		t.Fatalf("err %v, want it to say it gave up after 6 attempts", err)
+	}
+}
+
+func TestSendRetryBudgetBoundsRetryAfter(t *testing.T) {
+	srv := socktest.New(t)
+	for range 6 {
+		srv.SendErrs = append(srv.SendErrs, socktest.RateLimited("3600"))
+	}
+	app := testApp(t, srv)
+	app.RetryBudget = 50 * time.Millisecond
+	app.Retrier.Sleep = client.SleepCtx // really waits, so only the budget ends it
+	start := time.Now()
+	_, _, err := run(t, app, nil, "send", "hi")
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("waited %s past a 50ms budget", time.Since(start))
+	}
+	if err == nil || !strings.Contains(err.Error(), "gave up after 50ms") {
+		t.Fatalf("err %v, want it to say it gave up after 50ms", err)
+	}
+}
