@@ -3,7 +3,7 @@ LDFLAGS := -X main.version=$(VERSION)
 GO_LICENSES := go run github.com/google/go-licenses/v2@v2.0.1
 
 .DEFAULT_GOAL := build
-.PHONY: build test install redeploy check lint fmt vet licenses
+.PHONY: build test install redeploy check lint fmt vet tidy licenses
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/sock ./cmd/sock
@@ -29,4 +29,11 @@ vet:
 licenses:
 	$(GO_LICENSES) check ./... --disallowed_types=forbidden,restricted
 
-check: fmt vet lint licenses test
+# tidy fails when go.mod or go.sum need `go mod tidy`, as they do when a sibling
+# module the replace directives point at (sock-client, sock-contract) changed
+# its requirements. Run before everything else: go vet and go test fail
+# with the same complaint, less clearly.
+tidy:
+	go mod tidy -diff
+
+check: tidy fmt vet lint licenses test
