@@ -30,6 +30,11 @@ func newMachineKeyCmd(app *App) *cobra.Command {
 			"login. Revoke an unused one with sock devices revoke.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			short, _, _ := strings.Cut(app.host(), ".")
+			label, err := labelOr(label, short)
+			if err != nil {
+				return err
+			}
 			c, err := app.clients()
 			if err != nil {
 				return err
@@ -44,8 +49,7 @@ func newMachineKeyCmd(app *App) *cobra.Command {
 			return printToken(cmd, res.GetToken(), res.GetDevice().GetId())
 		},
 	}
-	create.Flags().StringVar(&label, "label", "", "what the key is for, usually this host (required)")
-	_ = create.MarkFlagRequired("label") // the flag exists: registered above
+	create.Flags().StringVar(&label, "label", "", "what the key is for (default this machine's short hostname)")
 	cmd.AddCommand(create, newMachineKeyUseCmd(app))
 	return cmd
 }
@@ -64,12 +68,12 @@ func newMachineKeyUseCmd(app *App) *cobra.Command {
 		Long: "Read a machine key (sock_mk_…) from stdin and write it to the config file as machine_key (mode 600), where " +
 			"sock-mcp reads it when SOCK_TOKEN is not set (a Codex plugin starts it without your environment) and makes " +
 			"each project its own puppet. The key is checked with the server first and saved with its url. sock-mcp takes SOCK_TOKEN first, then machine_key, then puppet_token. Pipe it: " +
-			"sock machine-key create --label <host> | sock machine-key use. Another machine_key in the file needs --force. " +
+			"sock machine-key create | sock machine-key use. Another machine_key in the file needs --force. " +
 			"The key is not printed.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if app.StdinIsTTY() {
-				return errors.New("pipe the key in, so it is not echoed: sock machine-key create --label <host> | sock machine-key use")
+				return errors.New("pipe the key in, so it is not echoed: sock machine-key create | sock machine-key use")
 			}
 			// one byte past the limit, so a longer input is refused, not cut
 			b, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), maxKeyInput+1))

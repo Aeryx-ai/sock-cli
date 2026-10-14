@@ -187,18 +187,29 @@ func (a *App) tokenExists() error {
 // deviceLabel is the flag's label, else "sock CLI on <hostname>" cut to
 // maxLabel characters.
 func (a *App) deviceLabel(flag string) (string, error) {
+	return labelOr(flag, "sock CLI on "+a.host())
+}
+
+// labelOr is the flag's label, refused past maxLabel characters, else dflt
+// cut to maxLabel characters.
+func labelOr(flag, dflt string) (string, error) {
 	if flag != "" {
 		if utf8.RuneCountInString(flag) > maxLabel {
 			return "", fmt.Errorf("--label is longer than %d characters", maxLabel)
 		}
 		return flag, nil
 	}
+	label := []rune(dflt)
+	return string(label[:min(len(label), maxLabel)]), nil
+}
+
+// host is this machine's hostname, or "unknown host".
+func (a *App) host() string {
 	host, err := a.Hostname()
 	if err != nil || host == "" {
-		host = "unknown host"
+		return "unknown host"
 	}
-	label := []rune("sock CLI on " + host)
-	return string(label[:min(len(label), maxLabel)]), nil
+	return host
 }
 
 // showLoginURL opens the browser, or prints the URL when asked to or when

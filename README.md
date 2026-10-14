@@ -65,14 +65,14 @@ An `<account>` is an account id or `@handle`.
     sock handle set <handle>
     sock accounts get <id>...
     sock accounts lookup <handle>
-    sock devices                                 # (this) marks the calling device
+    sock devices                                 # kind (session or machine-key), (this) marks the calling device
     sock devices revoke <device id>              # also revokes a puppet token
     sock puppets
     sock puppets create <name> --token-label <label>
     sock puppets token <puppet id> --label <label>
     sock puppets use <puppet id>                 mint a token and keep it as puppet_token, where sock-mcp reads it (prints no secret)
     sock puppets erase <puppet id> [--yes]
-    sock machine-key create --label <label>      # prints the key alone on stdout
+    sock machine-key create [--label <label>]    # default the short hostname; prints the key alone on stdout
     sock machine-key use [--force]               # key on stdin, kept as machine_key for sock-mcp (prints no secret)
     sock conversations
     sock conversations direct <account>

@@ -40,7 +40,7 @@ func newDevicesCmd(app *App) *cobra.Command {
 			this := tokenDeviceID(app.token)
 			p := app.printer()
 			for _, d := range res.GetDevices() {
-				if err := p.Device(cmd.OutOrStdout(), d, d.GetId() == this, ""); err != nil {
+				if err := p.Device(cmd.OutOrStdout(), d, d.GetId() == this, "", sockv1.DeviceKind_DEVICE_KIND_SESSION); err != nil {
 					return err
 				}
 			}
@@ -93,7 +93,7 @@ func newPuppetsCmd(app *App) *cobra.Command {
 					return err
 				}
 				for _, d := range pw.GetDevices() {
-					if err := p.Device(w, d, false, "  "); err != nil {
+					if err := p.Device(w, d, false, "  ", sockv1.DeviceKind_DEVICE_KIND_PUPPET_TOKEN); err != nil {
 						return err
 					}
 				}

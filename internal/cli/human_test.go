@@ -136,9 +136,16 @@ func TestProfileCommands(t *testing.T) {
 
 func TestDevices(t *testing.T) {
 	app, srv := signedIn(t)
-	srv.Devices = []*sockv1.Device{socktest.Device(socktest.HumanDeviceID, "human-1", "sock CLI on box"), socktest.Device("d-2", "human-1", "iPhone")}
+	mk := socktest.Device("d-mk", "human-1", "build-7")
+	mk.Kind = sockv1.DeviceKind_DEVICE_KIND_MACHINE_KEY
+	phone := socktest.Device("d-2", "human-1", "iPhone")
+	phone.Kind = sockv1.DeviceKind_DEVICE_KIND_SESSION
+	// the first is unset, as from a server before ADR 10: a human's device is a session
+	srv.Devices = []*sockv1.Device{socktest.Device(socktest.HumanDeviceID, "human-1", "sock CLI on box"), phone, mk}
 	out, _ := mustRun(t, app, "devices")
-	want := socktest.HumanDeviceID + "  sock CLI on box  created " + fixed + "  (this)\n" + "d-2  iPhone  created " + fixed + "\n"
+	want := socktest.HumanDeviceID + "  session  sock CLI on box  created " + fixed + "  (this)\n" +
+		"d-2  session  iPhone  created " + fixed + "\n" +
+		"d-mk  machine-key  build-7  created " + fixed + "\n"
 	if out != want {
 		t.Fatalf("got %q, want %q", out, want)
 	}
@@ -149,7 +156,7 @@ func TestDevices(t *testing.T) {
 		t.Fatalf("revoked %q", id)
 	}
 	out, _ = mustRun(t, app, "--json", "devices")
-	if lines := strings.Split(strings.TrimSpace(out), "\n"); len(lines) != 2 {
+	if lines := strings.Split(strings.TrimSpace(out), "\n"); len(lines) != 3 {
 		t.Fatalf("json lines %q", out)
 	}
 }
@@ -158,7 +165,7 @@ func TestPuppets(t *testing.T) {
 	app, srv := signedIn(t)
 	srv.Puppets = []*sockv1.PuppetWithDevices{{Puppet: socktest.Puppet("p-1", "ci"), Devices: []*sockv1.Device{socktest.Device("pd-1", "p-1", "runner")}}}
 	out, _ := mustRun(t, app, "puppets")
-	if want := "ci  puppet ci of human-1  id p-1\n  pd-1  runner  created " + fixed + "\n"; out != want {
+	if want := "ci  puppet ci of human-1  id p-1\n  pd-1  puppet-token  runner  created " + fixed + "\n"; out != want {
 		t.Fatalf("got %q, want %q", out, want)
 	}
 
@@ -477,8 +484,23 @@ func TestMachineKeyCreatePrintsTheKeyAlone(t *testing.T) {
 	if req := lastRequest[*sockv1.MintMachineKeyRequest](t, srv, "MintMachineKey"); req.GetLabel() != "mac" {
 		t.Fatalf("request %v", req)
 	}
-	if _, _, err := run(t, app, nil, "machine-key", "create"); err == nil {
-		t.Fatal("create without --label accepted")
+}
+
+// The label defaults to the short hostname, cut to 64 characters (cli.md).
+func TestMachineKeyCreateLabelDefaultsToTheShortHostname(t *testing.T) {
+	app, srv := signedIn(t)
+	app.Hostname = func() (string, error) { return "build-7.example.com", nil }
+	mustRun(t, app, "machine-key", "create")
+	if req := lastRequest[*sockv1.MintMachineKeyRequest](t, srv, "MintMachineKey"); req.GetLabel() != "build-7" {
+		t.Fatalf("label %q", req.GetLabel())
+	}
+	app.Hostname = func() (string, error) { return strings.Repeat("é", 80), nil }
+	mustRun(t, app, "machine-key", "create")
+	if req := lastRequest[*sockv1.MintMachineKeyRequest](t, srv, "MintMachineKey"); req.GetLabel() != strings.Repeat("é", 64) {
+		t.Fatalf("label %q", req.GetLabel())
+	}
+	if _, _, err := run(t, app, nil, "machine-key", "create", "--label", strings.Repeat("x", 65)); err == nil {
+		t.Fatal("a 65-character --label accepted")
 	}
 }
 

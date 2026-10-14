@@ -71,9 +71,18 @@ func localTime(ts interface{ AsTime() time.Time }) string {
 	return ts.AsTime().Local().Format(time.DateTime)
 }
 
+// deviceKinds names each device kind as the text output prints it.
+var deviceKinds = map[sockv1.DeviceKind]string{
+	sockv1.DeviceKind_DEVICE_KIND_SESSION:      "session",
+	sockv1.DeviceKind_DEVICE_KIND_PUPPET_TOKEN: "puppet-token",
+	sockv1.DeviceKind_DEVICE_KIND_MACHINE_KEY:  "machine-key",
+}
+
 // Device prints one device; this marks the calling device. indent prefixes
-// the text line (puppet devices under their puppet).
-func (p Printer) Device(w io.Writer, d *sockv1.Device, this bool, indent string) error {
+// the text line (puppet devices under their puppet). unset is the kind of a
+// device whose kind is UNSPECIFIED, from a server before ADR 10: a session
+// for a human's device, a puppet token for a puppet's.
+func (p Printer) Device(w io.Writer, d *sockv1.Device, this bool, indent string, unset sockv1.DeviceKind) error {
 	if p.JSON {
 		return p.json(w, d)
 	}
@@ -81,7 +90,11 @@ func (p Printer) Device(w io.Writer, d *sockv1.Device, this bool, indent string)
 	if this {
 		mark = "  (this)"
 	}
-	_, err := fmt.Fprintf(w, "%s%s  %s  created %s%s\n", indent, d.GetId(), d.GetLabel(), localTime(d.GetCreatedAt()), mark)
+	kind := d.GetKind()
+	if kind == sockv1.DeviceKind_DEVICE_KIND_UNSPECIFIED {
+		kind = unset
+	}
+	_, err := fmt.Fprintf(w, "%s%s  %s  %s  created %s%s\n", indent, d.GetId(), deviceKinds[kind], d.GetLabel(), localTime(d.GetCreatedAt()), mark)
 	return err
 }
 
