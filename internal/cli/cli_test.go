@@ -982,7 +982,7 @@ func TestSendSaysItGaveUpAfterTheAttempts(t *testing.T) {
 func TestSendRetryBudgetBoundsRetryAfter(t *testing.T) {
 	srv := socktest.New(t)
 	for range 6 {
-		srv.SendErrs = append(srv.SendErrs, socktest.RateLimited("3600"))
+		srv.SendErrs = append(srv.SendErrs, socktest.RateLimited("20"))
 	}
 	app := testApp(t, srv)
 	app.RetryBudget = 50 * time.Millisecond
@@ -994,6 +994,54 @@ func TestSendRetryBudgetBoundsRetryAfter(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "gave up after 50ms") {
 		t.Fatalf("err %v, want it to say it gave up after 50ms", err)
+	}
+}
+
+// A Retry-After past the retrier's Max is never retried early: send makes
+// one call, fails at once and names the wait, as a puppet and as plain send.
+func TestSendRateLimitedPastMaxFailsAtOnce(t *testing.T) {
+	for name, args := range map[string][]string{"send": {"send", "hi"}, "--as-puppet": {"send", "--as-puppet", "hi"}} {
+		t.Run(name, func(t *testing.T) {
+			srv := socktest.New(t)
+			srv.SendErrs = []error{socktest.RateLimited("600")}
+			app := puppetApp(t, srv, map[string]string{"SOCK_URL": srv.URL, "SOCK_TOKEN": socktest.Token}, "")
+			app.Retrier.Sleep = client.SleepCtx // a retry would really wait
+			start := time.Now()
+			out, errOut, err := run(t, app, nil, args...)
+			if took := time.Since(start); took > app.Retrier.Max/10 {
+				t.Fatalf("took %s, want well under Max %s", took, app.Retrier.Max)
+			}
+			if err == nil || err.Error() != "sending too fast; try again in 10m0s" {
+				t.Fatalf("err %v", err)
+			}
+			if out != "" || errOut != "" {
+				t.Fatalf("stdout %q stderr %q", out, errOut)
+			}
+			if n := len(srv.CallsTo("NotifyOwner")); n != 1 {
+				t.Fatalf("%d NotifyOwner calls, want 1", n)
+			}
+		})
+	}
+}
+
+// A Retry-After within Max is waited out once, then the send goes through.
+func TestSendRateLimitedWithinMaxWaitsThenSends(t *testing.T) {
+	srv := socktest.New(t)
+	srv.SendErrs = []error{socktest.RateLimited("20")}
+	app := testApp(t, srv)
+	waits := recordSleeps(&app.Retrier.Sleep)
+	out, _, err := run(t, app, nil, "send", "hi")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if w := waits(); !slices.Equal(w, []time.Duration{20 * time.Second}) {
+		t.Fatalf("waits %v, want [20s]", w)
+	}
+	if n := len(srv.CallsTo("NotifyOwner")); n != 2 {
+		t.Fatalf("%d NotifyOwner calls, want 2", n)
+	}
+	if strings.Count(out, "\n") != 1 || !strings.HasSuffix(out, ": hi\n") {
+		t.Fatalf("stdout %q", out)
 	}
 }
 

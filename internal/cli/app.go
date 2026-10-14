@@ -16,6 +16,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
+	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
+
 	"github.com/guygrigsby/sock-cli/internal/config"
 	client "github.com/guygrigsby/sock-client"
 )
@@ -137,7 +139,9 @@ func call[T any](ctx context.Context, a *App, fn func(context.Context) (T, error
 	bctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	out, err := client.Call(bctx, a.Retrier, fn)
-	if ctx.Err() == nil && (client.Transient(err) || errors.Is(err, context.DeadlineExceeded) && bctx.Err() != nil) {
+	// a rate limit is not an outage: client.Describe already names the wait
+	limited := client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_RATE_LIMITED
+	if ctx.Err() == nil && (client.Transient(err) && !limited || errors.Is(err, context.DeadlineExceeded) && bctx.Err() != nil) {
 		if bctx.Err() != nil {
 			return out, &rewritten{fmt.Sprintf("the server is unavailable: gave up after %s", budget), err}
 		}
