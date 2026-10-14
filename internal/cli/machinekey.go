@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -43,6 +44,12 @@ func newMachineKeyCmd(app *App) *cobra.Command {
 	return cmd
 }
 
+// defaultEnsureTimeout bounds puppets ensure; sweepTimeout the sweep within it.
+const (
+	defaultEnsureTimeout = 60 * time.Second
+	sweepTimeout         = 20 * time.Second
+)
+
 // newPuppetEnsureCmd makes sure dir's project has a puppet and says where its
 // token is kept. The token itself is never printed: a hook reads the file.
 func newPuppetEnsureCmd(app *App) *cobra.Command {
@@ -74,10 +81,18 @@ func newPuppetEnsureCmd(app *App) *cobra.Command {
 			}
 			// a cached token the hub rejects (the puppet was erased) is replaced
 			p.Check = client.NewTokenCheck(cfg.Config, app.userAgent())
-			sweep, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
+			// the whole run is bounded: it holds the project's cache lock, and a
+			// hook waits on it
+			limit := cmp.Or(app.EnsureTimeout, defaultEnsureTimeout)
+			ctx, cancel := context.WithTimeout(cmd.Context(), limit)
+			defer cancel()
+			sweep, cancelSweep := context.WithTimeout(ctx, sweepTimeout)
 			p.Sweep(sweep)
-			cancel()
-			if _, err := p.Ensure(cmd.Context(), args[0]); err != nil {
+			cancelSweep()
+			if _, err := p.Ensure(ctx, args[0]); err != nil {
+				if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
+					return fmt.Errorf("puppets ensure gave up after %s: %w", limit, err)
+				}
 				return err
 			}
 			path, err := p.TokenFile(args[0])

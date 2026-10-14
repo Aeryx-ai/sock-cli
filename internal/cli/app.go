@@ -49,6 +49,8 @@ type App struct {
 	// LoginTimeout bounds the wait for the browser sign-in. Zero means
 	// login.DefaultTimeout.
 	LoginTimeout time.Duration
+	// EnsureTimeout bounds puppets ensure. Zero means defaultEnsureTimeout.
+	EnsureTimeout time.Duration
 
 	flagURL   string
 	flagToken string
