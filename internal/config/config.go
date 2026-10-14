@@ -39,28 +39,15 @@ type Sources struct {
 	Anonymous bool
 }
 
-type file struct {
-	URL        string `toml:"url"`
-	Token      string `toml:"token"`
-	AccessGate string `toml:"access_gate"`
-}
-
 // DefaultPath is $XDG_CONFIG_HOME/sock/config.toml, else ~/.config/sock/config.toml.
 func DefaultPath(getenv func(string) string) (string, error) {
-	if x := getenv("XDG_CONFIG_HOME"); x != "" {
-		return filepath.Join(x, "sock", "config.toml"), nil
-	}
-	home := getenv("HOME")
-	if home == "" {
-		return "", errors.New("config: neither XDG_CONFIG_HOME nor HOME is set")
-	}
-	return filepath.Join(home, ".config", "sock", "config.toml"), nil
+	return client.DefaultConfigPath(getenv)
 }
 
 // Load resolves and validates the config.
 func Load(s Sources) (Config, error) {
 	c := Config{Config: client.Config{URL: DefaultURL}}
-	f, err := readFile(s.Path)
+	f, err := client.LoadFileConfig(s.Path)
 	if err != nil {
 		return Config{}, err
 	}
@@ -93,27 +80,6 @@ func Load(s Sources) (Config, error) {
 	return c, nil
 }
 
-func readFile(path string) (file, error) {
-	var f file
-	if path == "" {
-		return f, nil
-	}
-	info, err := os.Stat(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return f, nil
-	}
-	if err != nil {
-		return f, fmt.Errorf("config: %w", err)
-	}
-	if _, err := toml.DecodeFile(path, &f); err != nil {
-		return f, fmt.Errorf("config: parse %s: %w", path, err)
-	}
-	if (f.Token != "" || f.AccessGate != "") && info.Mode().Perm()&0o077 != 0 {
-		return file{}, fmt.Errorf("config: %s holds a secret but is readable by others (mode %o); run chmod 600 %s", path, info.Mode().Perm(), path)
-	}
-	return f, nil
-}
-
 // anonymousToken stands in for the token when an anonymous load validates
 // the URL with the shared rules, which check a token too.
 const anonymousToken = "sock_st_anonymous"
@@ -140,7 +106,7 @@ func validate(c Config, anonymous bool) error {
 // FileToken returns the token the config file holds, or "" when it holds
 // none or does not exist.
 func FileToken(path string) (string, error) {
-	f, err := readFile(path)
+	f, err := client.LoadFileConfig(path)
 	if err != nil {
 		return "", err
 	}
