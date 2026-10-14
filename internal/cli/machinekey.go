@@ -86,18 +86,23 @@ func newPuppetEnsureCmd(app *App) *cobra.Command {
 			limit := cmp.Or(app.EnsureTimeout, defaultEnsureTimeout)
 			ctx, cancel := context.WithTimeout(cmd.Context(), limit)
 			defer cancel()
-			sweep, cancelSweep := context.WithTimeout(ctx, sweepTimeout)
-			p.Sweep(sweep)
-			cancelSweep()
-			if _, err := p.Ensure(ctx, args[0]); err != nil {
+			gaveUp := func(err error) error {
 				if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
 					return fmt.Errorf("puppets ensure gave up after %s: %w", limit, err)
 				}
 				return err
 			}
-			path, err := p.TokenFile(args[0])
+			// the path first: a token check that runs out the clock still
+			// keeps the cached token, and its path must be printable
+			path, err := p.TokenFile(ctx, args[0])
 			if err != nil {
-				return err
+				return gaveUp(err)
+			}
+			sweep, cancelSweep := context.WithTimeout(ctx, sweepTimeout)
+			p.Sweep(sweep)
+			cancelSweep()
+			if _, err := p.Ensure(ctx, args[0]); err != nil {
+				return gaveUp(err)
 			}
 			_, err = fmt.Fprintln(cmd.OutOrStdout(), path)
 			return err

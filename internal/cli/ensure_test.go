@@ -39,7 +39,7 @@ func TestPuppetsEnsureGivesUpOnAHubThatNeverAnswers(t *testing.T) {
 	}
 	// a cached token the hub never answers about is kept, not waited on
 	p := client.Projects{Dir: client.ProjectsDir(app.Getenv, client.Config{URL: hang.URL, Token: socktest.MachineKeyToken})}
-	path, err := p.TokenFile(dir)
+	path, err := p.TokenFile(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

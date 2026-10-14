@@ -26,7 +26,7 @@ func TestPuppetsEnsureGivesUpOnABusyCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := client.Projects{Dir: client.ProjectsDir(app.Getenv, client.Config{URL: srv.URL, Token: socktest.MachineKeyToken})}
-	path, err := p.TokenFile(dir)
+	path, err := p.TokenFile(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
