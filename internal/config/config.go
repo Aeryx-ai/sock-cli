@@ -132,6 +132,16 @@ func SetNewToken(path, token string) error {
 	})
 }
 
+// SetPuppetToken writes the puppet token sock-mcp reads into the config file
+// under puppet_token, replacing any earlier one and keeping every other key,
+// the human's token included. Written like SetNewToken.
+func SetPuppetToken(path, token string) error {
+	return rewrite(path, func(m map[string]any) error {
+		m["puppet_token"] = token
+		return nil
+	})
+}
+
 // RemoveToken deletes the token from the config file, keeping every other
 // key. A missing file is not an error.
 func RemoveToken(path string) error {

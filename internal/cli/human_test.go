@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	client "github.com/guygrigsby/sock-client"
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 
 	"github.com/guygrigsby/sock-cli/internal/socktest"
@@ -396,5 +397,38 @@ func TestAccountEraseRemovesFileToken(t *testing.T) {
 	}
 	if fileToken(t, app) != "" {
 		t.Fatal("token kept after erase")
+	}
+}
+
+// `puppets use` keeps a puppet token where sock-mcp reads it, without printing
+// it or touching the human's own token.
+func TestPuppetsUseWritesThePuppetTokenToTheConfigFile(t *testing.T) {
+	app, srv := signedIn(t)
+	app.ConfigPath = filepath.Join(t.TempDir(), "sock", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(app.ConfigPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(app.ConfigPath, []byte("url = \"https://x.example\"\ntoken = \"sock_st_human_secret\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut := mustRun(t, app, "puppets", "use", "p-1")
+	if strings.Contains(out+errOut, "sock_pt_") {
+		t.Fatalf("the token was printed: stdout %q stderr %q", out, errOut)
+	}
+	if req := lastRequest[*sockv1.MintPuppetTokenRequest](t, srv, "MintPuppetToken"); req.GetPuppetId() != "p-1" || req.GetLabel() == "" {
+		t.Fatalf("mint request %v", req)
+	}
+	f, err := client.LoadFileConfig(app.ConfigPath)
+	if err != nil || f.PuppetToken != "sock_pt_device-minted_secret" || f.Token != "sock_st_human_secret" || f.URL != "https://x.example" {
+		t.Fatalf("file %+v, %v", f, err)
+	}
+	fi, err := os.Stat(app.ConfigPath)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v, %v", fi, err)
+	}
+	// a second use replaces the first
+	mustRun(t, app, "puppets", "use", "p-1")
+	if f, _ := client.LoadFileConfig(app.ConfigPath); f.PuppetToken == "" {
+		t.Fatal("second use lost the token")
 	}
 }

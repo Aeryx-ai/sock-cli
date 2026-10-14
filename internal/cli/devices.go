@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
+
+	"github.com/guygrigsby/sock-cli/internal/config"
 )
 
 // tokenDeviceID is the device id inside a sock_st_ or sock_pt_ token.
@@ -98,7 +100,7 @@ func newPuppetsCmd(app *App) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.AddCommand(newPuppetCreateCmd(app), newPuppetTokenCmd(app), newPuppetEraseCmd(app))
+	cmd.AddCommand(newPuppetCreateCmd(app), newPuppetTokenCmd(app), newPuppetUseCmd(app), newPuppetEraseCmd(app))
 	return cmd
 }
 
@@ -156,6 +158,38 @@ func newPuppetTokenCmd(app *App) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&label, "label", "", "token label (required)")
 	_ = cmd.MarkFlagRequired("label") // the flag exists: registered above
+	return cmd
+}
+
+// newPuppetUseCmd mints a token for a puppet and keeps it in the config file
+// as puppet_token, where sock-mcp reads it when its environment has none. The
+// token is never printed, so it passes through no terminal or shell history.
+func newPuppetUseCmd(app *App) *cobra.Command {
+	var label string
+	cmd := &cobra.Command{
+		Use:   "use <puppet id>",
+		Short: "Mint a token for a puppet and keep it for sock-mcp",
+		Long: "Mint a puppet token and write it to the config file as puppet_token (mode 600), where sock-mcp reads it when " +
+			"SOCK_TOKEN is not set (a Codex plugin starts it without your environment). Your own login token is untouched. " +
+			"The token is not printed.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := app.clients()
+			if err != nil {
+				return err
+			}
+			res, err := unary(cmd.Context(), app, c.Identity.MintPuppetToken, &sockv1.MintPuppetTokenRequest{PuppetId: args[0], Label: label})
+			if err != nil {
+				return err
+			}
+			if err := config.SetPuppetToken(app.ConfigPath, res.GetToken()); err != nil {
+				return fmt.Errorf("minted a token (device %s) but could not save it: %w; revoke it with sock devices revoke", res.GetDevice().GetId(), err)
+			}
+			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "saved puppet token (device %s) to %s\n", res.GetDevice().GetId(), app.ConfigPath)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&label, "label", "sock-mcp", "token label")
 	return cmd
 }
 
