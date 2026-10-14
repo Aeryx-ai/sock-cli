@@ -277,7 +277,7 @@ func rewrite(path string, edit func(map[string]any) error) error {
 	}
 	m := map[string]any{}
 	if _, err := toml.DecodeFile(path, &m); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("config: parse %s: %w", path, err)
+		return client.ParseError(path, err)
 	}
 	if err := edit(m); err != nil {
 		return err

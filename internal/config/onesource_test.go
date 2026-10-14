@@ -67,3 +67,17 @@ func TestSetNewTokenRecordsTheServer(t *testing.T) {
 		t.Fatal("token saved for another server")
 	}
 }
+
+// Rewriting a malformed file never quotes it: an unquoted gate is the word
+// the parser would echo.
+func TestRewriteParseErrorHidesContents(t *testing.T) {
+	for _, body := range []string{"access_gate = hunter2\n", "hunter2 = = 1\n", "[hunter2]\nx = = 1\n"} {
+		p := writeFile(t, 0o600, body)
+		if err := SetNewToken(p, "sock_st_dev_secret", DefaultURL, ""); err == nil || strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("%q: %v", body, err)
+		}
+		if err := RemoveToken(p); err == nil || strings.Contains(err.Error(), "hunter2") {
+			t.Errorf("%q: %v", body, err)
+		}
+	}
+}
