@@ -14,8 +14,8 @@ import (
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 
 	"github.com/guygrigsby/sock-cli/internal/config"
-	"github.com/guygrigsby/sock-cli/internal/login"
 	client "github.com/guygrigsby/sock-client"
+	"github.com/guygrigsby/sock-client/login"
 )
 
 // The documents the app links in SockKit/Legal.swift, and the terms version
