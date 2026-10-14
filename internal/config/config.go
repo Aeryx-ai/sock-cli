@@ -154,11 +154,19 @@ var ErrMachineKeyExists = errors.New("config file already holds another machine_
 // SetMachineKey writes the machine key sock-mcp reads into the config file
 // under machine_key, keeping every other key and filling url and gate like
 // SetPuppetToken. Another machine key already there is ErrMachineKeyExists
-// unless force; the same one is left as it is.
+// unless force; the same one is left as it is. A file naming another url or
+// gate is refused, as PuppetFileConflict says.
 func SetMachineKey(path, key, url, gate string, force bool) error {
 	return rewrite(path, func(m map[string]any) error {
 		if s, _ := m["machine_key"].(string); !force && strings.TrimSpace(s) != "" && strings.TrimSpace(s) != key {
 			return ErrMachineKeyExists
+		}
+		// on the file as rewritten: a url written since any earlier check
+		// is never paired with this key
+		fileURL, _ := m["url"].(string)
+		fileGate, _ := m["access_gate"].(string)
+		if why := serverConflict(fileURL, fileGate, url, gate); why != "" {
+			return errors.New(why)
 		}
 		m["machine_key"] = key
 		fillServer(m, url, gate)
@@ -185,13 +193,19 @@ func PuppetFileConflict(path, url, gate string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if f.URL != "" && f.URL != url {
-		return "the config file's url differs from the server this command is using; unset SOCK_URL and --url, or change url in the file", nil
+	return serverConflict(f.URL, f.AccessGate, url, gate), nil
+}
+
+// serverConflict says why a credential for url and gate cannot sit in a file
+// naming fileURL and fileGate, or "" when it can.
+func serverConflict(fileURL, fileGate, url, gate string) string {
+	if fileURL != "" && fileURL != url {
+		return "the config file's url differs from the server this command is using; unset SOCK_URL and --url, or change url in the file"
 	}
-	if f.AccessGate != "" && f.AccessGate != gate {
-		return "the config file's access_gate differs from the one this command is using; unset SOCK_ACCESS_GATE or change access_gate in the file", nil
+	if fileGate != "" && fileGate != gate {
+		return "the config file's access_gate differs from the one this command is using; unset SOCK_ACCESS_GATE or change access_gate in the file"
 	}
-	return "", nil
+	return ""
 }
 
 // RemoveToken deletes the token from the config file, keeping every other

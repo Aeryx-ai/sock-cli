@@ -329,3 +329,17 @@ func TestSetMachineKeyRefusesAnotherWithoutForce(t *testing.T) {
 	}
 	assertMode(t, p, 0o600)
 }
+
+// security review 2: the url and gate check runs on the file as rewritten, so
+// a url written since an earlier check is never paired with this key
+func TestSetMachineKeyRefusesAnotherServer(t *testing.T) {
+	for _, body := range []string{"url = \"https://other.example\"\n", "access_gate = \"other\"\n"} {
+		p := writeFile(t, 0o600, body)
+		if err := SetMachineKey(p, "sock_mk_new_secret", "https://x.example", "g", true); err == nil || strings.Contains(err.Error(), "sock_mk_") {
+			t.Fatalf("%q: %v", body, err)
+		}
+		if b, _ := os.ReadFile(p); string(b) != body {
+			t.Fatalf("file changed: %q", b)
+		}
+	}
+}
