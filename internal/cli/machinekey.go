@@ -68,7 +68,7 @@ func newPuppetEnsureCmd(app *App) *cobra.Command {
 			}
 			p := &client.Projects{
 				API:  client.NewPuppetAPI(c, app.Retrier),
-				Dir:  client.DefaultProjectsDir(app.Getenv),
+				Dir:  client.ProjectsDir(app.Getenv, cfg.Config),
 				Host: client.ShortHost(),
 				Log:  func(f string, a ...any) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), f+"\n", a...) },
 			}

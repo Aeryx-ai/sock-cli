@@ -534,3 +534,21 @@ func TestPuppetsEnsureNeedsAMachineKey(t *testing.T) {
 		}
 	}
 }
+
+// security review 1: a machine key's puppets on one server are not another
+// server's: ensure against B neither offers B the token cached for A nor
+// skips making B's puppet
+func TestPuppetsEnsureKeepsEachServersPuppetsApart(t *testing.T) {
+	a, b := socktest.New(t), socktest.New(t)
+	appA, state := ensureApp(t, a, socktest.MachineKeyToken)
+	appB := humanApp(t, b, map[string]string{"SOCK_TOKEN": socktest.MachineKeyToken, "XDG_STATE_HOME": state, "HOME": t.TempDir()})
+	dir := filepath.Join(t.TempDir(), "myproj")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outA, _ := mustRun(t, appA, "puppets", "ensure", dir)
+	outB, _ := mustRun(t, appB, "puppets", "ensure", dir)
+	if outA == outB || len(b.CallsTo("GetMe")) != 0 || len(b.CallsTo("CreatePuppet")) != 1 {
+		t.Fatalf("a %q b %q; b's GetMe %d CreatePuppet %d", outA, outB, len(b.CallsTo("GetMe")), len(b.CallsTo("CreatePuppet")))
+	}
+}
