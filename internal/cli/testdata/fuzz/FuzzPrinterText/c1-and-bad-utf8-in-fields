@@ -1,0 +1,8 @@
+go test fuzz v1
+string("m1")
+string("c\r1")
+string("acc\x9b1")
+string("x")
+string("\u009b31m")
+string("h")
+string("l\n")

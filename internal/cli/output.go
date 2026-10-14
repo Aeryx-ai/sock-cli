@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -13,7 +15,23 @@ import (
 )
 
 // Printer writes messages, accounts and conversations as text or JSON lines.
+// Text output passes every server string through term, so what another
+// account wrote never reaches the terminal as a control sequence.
 type Printer struct{ JSON bool }
+
+// term makes s safe to print: control characters (C0, DEL, C1) and invalid
+// UTF-8 become U+FFFD, except tab and, for message text, newline.
+func term(s string, multiline bool) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\t' || (multiline && r == '\n') || !unicode.IsControl(r) {
+			return r
+		}
+		return utf8.RuneError
+	}, s)
+}
+
+// line is term for a single-line field.
+func line(s string) string { return term(s, false) }
 
 func (p Printer) json(w io.Writer, m proto.Message) error {
 	b, err := protojson.Marshal(m)
@@ -31,7 +49,7 @@ func (p Printer) Message(w io.Writer, m *sockv1.Message) error {
 	}
 	_, err := fmt.Fprintf(w, "%s  %s #%d  %s: %s\n",
 		localTime(m.GetSentAt()),
-		m.GetConversationId(), m.GetSeq(), m.GetSenderId(), m.GetText())
+		line(m.GetConversationId()), m.GetSeq(), line(m.GetSenderId()), term(m.GetText(), true))
 	return err
 }
 
@@ -49,7 +67,7 @@ func (p Printer) Account(w io.Writer, a *sockv1.Account) error {
 	default:
 		kind = "unknown kind"
 	}
-	_, err := fmt.Fprintf(w, "%s  %s  id %s\n", a.GetDisplayName(), kind, a.GetId())
+	_, err := fmt.Fprintf(w, "%s  %s  id %s\n", line(a.GetDisplayName()), line(kind), line(a.GetId()))
 	return err
 }
 
@@ -62,7 +80,7 @@ func (p Printer) Conversation(w io.Writer, c *sockv1.Conversation) error {
 	if c.GetKind() == sockv1.ConversationKind_CONVERSATION_KIND_DIRECT {
 		kind = "direct"
 	}
-	_, err := fmt.Fprintf(w, "%s  %s  members %s\n", c.GetId(), kind, strings.Join(c.GetMemberIds(), ","))
+	_, err := fmt.Fprintf(w, "%s  %s  members %s\n", line(c.GetId()), kind, line(strings.Join(c.GetMemberIds(), ",")))
 	return err
 }
 
@@ -94,7 +112,7 @@ func (p Printer) Device(w io.Writer, d *sockv1.Device, this bool, indent string,
 	if kind == sockv1.DeviceKind_DEVICE_KIND_UNSPECIFIED {
 		kind = unset
 	}
-	_, err := fmt.Fprintf(w, "%s%s  %s  %s  created %s%s\n", indent, d.GetId(), deviceKinds[kind], d.GetLabel(), localTime(d.GetCreatedAt()), mark)
+	_, err := fmt.Fprintf(w, "%s%s  %s  %s  created %s%s\n", indent, line(d.GetId()), deviceKinds[kind], line(d.GetLabel()), localTime(d.GetCreatedAt()), mark)
 	return err
 }
 
@@ -103,7 +121,7 @@ func (p Printer) Blocked(w io.Writer, b *sockv1.BlockedAccount) error {
 	if p.JSON {
 		return p.json(w, b)
 	}
-	_, err := fmt.Fprintf(w, "%s  blocked %s\n", b.GetAccountId(), localTime(b.GetBlockedAt()))
+	_, err := fmt.Fprintf(w, "%s  blocked %s\n", line(b.GetAccountId()), localTime(b.GetBlockedAt()))
 	return err
 }
 
@@ -113,6 +131,6 @@ func (p Printer) Done(w io.Writer, res proto.Message, text string) error {
 	if p.JSON {
 		return p.json(w, res)
 	}
-	_, err := fmt.Fprintln(w, text)
+	_, err := fmt.Fprintln(w, line(text))
 	return err
 }
