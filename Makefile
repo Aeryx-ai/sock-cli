@@ -15,7 +15,8 @@ GO_LICENSES := go run github.com/google/go-licenses/v2@v2.0.1
 # with the same replaces. go.mod itself is never edited.
 # make check-head (PINS empty) builds against the siblings' HEAD instead.
 PIN_CACHE ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/sock-pins
-PINS ?= contract client
+PINNED := contract client
+PINS ?= $(PINNED)
 ifneq ($(PINS),)
 export GOWORK := $(CURDIR)/.pins/go.work
 TIDY_FLAGS := -modfile=$(CURDIR)/.pins/go.mod
@@ -84,7 +85,7 @@ tidy:
 # ref file make check builds against, so CI and make check cannot pin
 # different tags.
 ci-pins:
-	@for m in contract client; do \
+	@for m in $(PINNED); do \
 		grep -q "$$m=\$$(cat [^)]*\.$$m-ref)\" >> \"\$$GITHUB_OUTPUT\"" .github/workflows/ci.yml && \
 		grep -q "ref: \$${{ steps.pins.outputs.$$m }}" .github/workflows/ci.yml || \
 		{ echo "ci.yml must check out sock-$$m at the tag in .$$m-ref (steps.pins.outputs.$$m)" >&2; exit 1; }; \
