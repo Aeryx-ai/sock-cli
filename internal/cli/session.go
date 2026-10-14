@@ -179,7 +179,7 @@ func (a *App) signIn(cmd *cobra.Command, f signInFlags, rpc signInRPC) error {
 	if a.jsonOut {
 		return a.printer().json(cmd.OutOrStdout(), session)
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "signed in as @%s on device %s\n", session.GetAccount().GetHuman().GetHandle(), session.GetDevice().GetId())
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "signed in as @%s on device %s\n", line(session.GetAccount().GetHuman().GetHandle()), line(session.GetDevice().GetId()))
 	return err
 }
 
@@ -229,13 +229,21 @@ func (a *App) showLoginURL(stderr io.Writer, noBrowser bool) func(string) error 
 			}
 			warn(stderr, "could not open a browser")
 		}
-		_, err := fmt.Fprintf(stderr, "Open this URL in a browser on this computer to sign in with Apple:\n\n  %s\n\n", u)
+		_, err := fmt.Fprintf(stderr, "Open this URL in a browser on this computer to sign in with Apple:\n\n  %s\n\n", line(u))
 		return err
 	}
 }
 
 // warn writes a diagnostic line. A failing stderr has no recovery path.
-func warn(w io.Writer, msg string) { _, _ = fmt.Fprintln(w, "sock: "+msg) }
+// msg can carry server or file text, so it is printed through line.
+func warn(w io.Writer, msg string) { _, _ = fmt.Fprintln(w, "sock: "+line(msg)) }
+
+// warnf is warn with a format.
+func warnf(w io.Writer, format string, args ...any) { warn(w, fmt.Sprintf(format, args...)) }
+
+// Report prints the error a command ended with, through term: it can carry
+// server text.
+func Report(w io.Writer, err error) { _, _ = fmt.Fprintln(w, "sock: "+term(err.Error(), true)) }
 
 func newLogoutCmd(app *App) *cobra.Command {
 	return &cobra.Command{

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 
 	client "github.com/guygrigsby/sock-client"
@@ -34,7 +33,7 @@ func (a *App) puppetClients(ctx context.Context, project string, stderr io.Write
 		WorkDir:       project,
 		NoProjectHint: "set CLAUDE_PROJECT_DIR or pass --project the project's repository",
 		UserAgent:     a.userAgent(),
-		Log:           func(f string, args ...any) { _, _ = fmt.Fprintf(stderr, "sock: "+f+"\n", args...) },
+		Log:           func(f string, args ...any) { warnf(stderr, f, args...) },
 		TrustCache:    true,
 	}
 	cfg, err := client.LoadPuppetConfig(o)

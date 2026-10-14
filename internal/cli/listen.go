@@ -72,7 +72,7 @@ type listener struct {
 
 // logf writes a diagnostic line. A failing stderr has no recovery path.
 func (l *listener) logf(format string, args ...any) {
-	_, _ = fmt.Fprintf(l.errOut, "sock: "+format+"\n", args...)
+	warnf(l.errOut, format, args...)
 }
 
 // Run subscribes until ctx ends or the server refuses the caller outright.

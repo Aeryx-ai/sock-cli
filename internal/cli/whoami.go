@@ -41,7 +41,7 @@ func newWhoamiCmd(app *App) *cobra.Command {
 
 // termsLine is "terms accepted <v>, current <v>".
 func termsLine(me *sockv1.GetMeResponse) string {
-	return fmt.Sprintf("terms accepted %s, current %s", cmp.Or(me.GetAcceptedTermsVersion(), "none"), me.GetCurrentTermsVersion())
+	return fmt.Sprintf("terms accepted %s, current %s", line(cmp.Or(me.GetAcceptedTermsVersion(), "none")), line(me.GetCurrentTermsVersion()))
 }
 
 func newTermsCmd(app *App) *cobra.Command {
@@ -61,7 +61,7 @@ func newTermsCmd(app *App) *cobra.Command {
 			if app.jsonOut {
 				return app.printer().json(cmd.OutOrStdout(), me)
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "accepted %s, current %s\n%s\n", cmp.Or(me.GetAcceptedTermsVersion(), "none"), me.GetCurrentTermsVersion(), termsURL)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "accepted %s, current %s\n%s\n", line(cmp.Or(me.GetAcceptedTermsVersion(), "none")), line(me.GetCurrentTermsVersion()), termsURL)
 			return err
 		},
 	}

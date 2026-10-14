@@ -5,12 +5,12 @@ import (
 	"io"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
+	client "github.com/guygrigsby/sock-client"
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 )
 
@@ -19,15 +19,15 @@ import (
 // account wrote never reaches the terminal as a control sequence.
 type Printer struct{ JSON bool }
 
-// term makes s safe to print: control characters (C0, DEL, C1) and invalid
-// UTF-8 become U+FFFD, except tab and, for message text, newline.
+// term makes s safe to print with client.TerminalSafe: control characters
+// (C0, DEL, C1), bidi controls and invalid UTF-8 become U+FFFD, except tab
+// and, for message text, newline.
 func term(s string, multiline bool) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\t' || (multiline && r == '\n') || !unicode.IsControl(r) {
-			return r
-		}
-		return utf8.RuneError
-	}, s)
+	s = client.TerminalSafe(s)
+	if !multiline {
+		s = strings.ReplaceAll(s, "\n", string(utf8.RuneError))
+	}
+	return s
 }
 
 // line is term for a single-line field.

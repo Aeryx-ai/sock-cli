@@ -142,7 +142,7 @@ func newPuppetEnsureCmd(app *App) *cobra.Command {
 				API:  client.NewPuppetAPI(c, app.Retrier),
 				Dir:  client.ProjectsDir(app.Getenv, cfg.Config),
 				Host: client.ShortHost(),
-				Log:  func(f string, a ...any) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), f+"\n", a...) },
+				Log:  func(f string, a ...any) { _, _ = fmt.Fprintln(cmd.ErrOrStderr(), line(fmt.Sprintf(f, a...))) },
 			}
 			// a cached token the hub rejects (the puppet was erased) is replaced
 			p.Check = client.NewTokenCheck(cfg.Config, app.userAgent())
