@@ -12,9 +12,10 @@ import (
 // errNotConfirmed is a destructive command the person declined.
 var errNotConfirmed = errors.New("not confirmed; nothing changed")
 
-// ask prints prompt to stderr and reads one line from stdin.
+// ask prints prompt to stderr, through line since it can carry server text,
+// and reads one line from stdin.
 func ask(cmd *cobra.Command, prompt string) (string, error) {
-	if _, err := fmt.Fprint(cmd.ErrOrStderr(), prompt); err != nil {
+	if _, err := fmt.Fprint(cmd.ErrOrStderr(), line(prompt)); err != nil {
 		return "", err
 	}
 	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')

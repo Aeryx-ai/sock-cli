@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
+	"github.com/spf13/cobra"
 
 	"github.com/guygrigsby/sock-cli/internal/socktest"
 )
@@ -73,4 +74,23 @@ func TestLoginAndTermsHideControls(t *testing.T) {
 		}
 		shown(t, args[0], out+errOut)
 	}
+}
+
+func TestTokenAndPromptHideControls(t *testing.T) {
+	var out, errOut bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	if err := printToken(cmd, "sock_pt_d1_x", "d"+evil); err != nil {
+		t.Fatal(err)
+	}
+	shown(t, "printToken", out.String()+errOut.String())
+
+	srv := socktest.New(t)
+	srv.Me = socktest.Human()
+	srv.Me.Kind = &sockv1.Account_Human{Human: &sockv1.Human{Handle: "guy" + evil}}
+	app := humanApp(t, srv, map[string]string{"SOCK_TOKEN": socktest.HumanToken})
+	app.StdinIsTTY = func() bool { return true }
+	_, errStr, _ := run(t, app, strings.NewReader("no\n"), "account", "erase")
+	shown(t, "erase prompt", errStr)
 }

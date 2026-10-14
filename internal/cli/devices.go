@@ -203,7 +203,7 @@ func newPuppetUseCmd(app *App) *cobra.Command {
 			if err := config.SetPuppetToken(app.ConfigPath, res.GetToken(), cfg.URL, cfg.AccessGate); err != nil {
 				return fmt.Errorf("minted a token (device %s) but could not save it: %w; revoke it with sock devices revoke", res.GetDevice().GetId(), err)
 			}
-			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "saved puppet token (device %s) to %s\n", res.GetDevice().GetId(), app.ConfigPath)
+			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "saved puppet token (device %s) to %s\n", line(res.GetDevice().GetId()), app.ConfigPath)
 			return err
 		},
 	}
@@ -213,10 +213,10 @@ func newPuppetUseCmd(app *App) *cobra.Command {
 
 // printToken writes the minted token alone on stdout and its device on stderr.
 func printToken(cmd *cobra.Command, token, deviceID string) error {
-	if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "device "+deviceID); err != nil {
+	if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "device "+line(deviceID)); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(cmd.OutOrStdout(), token)
+	_, err := fmt.Fprintln(cmd.OutOrStdout(), line(token))
 	return err
 }
 
