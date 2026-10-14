@@ -575,32 +575,54 @@ func TestMachineKeyUseSavesTheKeyFromStdin(t *testing.T) {
 	if fi, _ := os.Stat(app.ConfigPath); fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", fi.Mode())
 	}
-	// another key needs --force; the same one is fine
-	if _, _, err := run(t, app, strings.NewReader("sock_mk_other_secret\n"), "machine-key", "use"); err == nil || !strings.Contains(err.Error(), "--force") || strings.Contains(err.Error(), "sock_mk_") {
-		t.Fatalf("overwrite without --force: %v", err)
+	// the key was checked against the hub it is saved with
+	if req := srv.CallsTo("ListPuppets"); len(req) != 1 || req[0].Header.Get("Authorization") != "Bearer "+socktest.MachineKeyToken {
+		t.Fatalf("ListPuppets calls %v", req)
 	}
 	if _, _, err := run(t, app, strings.NewReader(socktest.MachineKeyToken), "machine-key", "use"); err != nil {
 		t.Fatalf("same key: %v", err)
 	}
-	if _, _, err := run(t, app, strings.NewReader("sock_mk_other_secret\n"), "machine-key", "use", "--force"); err != nil {
+	// another key needs --force
+	body := fmt.Sprintf("url = %q\nmachine_key = \"sock_mk_old_secret\"\n", srv.URL)
+	if err := os.WriteFile(app.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, app, strings.NewReader(socktest.MachineKeyToken+"\n"), "machine-key", "use"); err == nil || !strings.Contains(err.Error(), "--force") || strings.Contains(err.Error(), "sock_mk_") {
+		t.Fatalf("overwrite without --force: %v", err)
+	}
+	if _, _, err := run(t, app, strings.NewReader(socktest.MachineKeyToken+"\n"), "machine-key", "use", "--force"); err != nil {
 		t.Fatalf("--force: %v", err)
 	}
-	if f, _ := client.LoadFileConfig(app.ConfigPath); f.MachineKey != "sock_mk_other_secret" {
+	if f, _ := client.LoadFileConfig(app.ConfigPath); f.MachineKey != socktest.MachineKeyToken {
 		t.Fatalf("file %+v", f)
+	}
+}
+
+// security review 1: a key minted on another hub (SOCK_URL on create only) is
+// refused, not saved beside this hub's url for sock-mcp to send there
+func TestMachineKeyUseRefusesAKeyTheHubRejects(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	_, _, err := run(t, app, strings.NewReader("sock_mk_staging_secret\n"), "machine-key", "use")
+	if err == nil || !strings.Contains(err.Error(), "does not accept") || strings.Contains(err.Error(), "staging_secret") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(app.ConfigPath); err == nil {
+		t.Fatal("wrote the file")
 	}
 }
 
 func TestMachineKeyUseRefusesWhatIsNotAMachineKey(t *testing.T) {
 	srv := socktest.New(t)
 	app := humanApp(t, srv, nil)
-	for _, in := range []string{"", "sock_pt_dev_secret\n", "sock_mk_a b\n"} {
+	for _, in := range []string{"", "sock_pt_dev_secret\n", "sock_mk_a b\n", "sock_mk_" + strings.Repeat("s", 5000)} {
 		_, _, err := run(t, app, strings.NewReader(in), "machine-key", "use")
 		if err == nil || strings.Contains(err.Error(), "secret") {
-			t.Fatalf("%q: %v", in, err)
+			t.Fatalf("input of %d bytes: %v", len(in), err)
 		}
 	}
-	if _, err := os.Stat(app.ConfigPath); err == nil {
-		t.Fatal("wrote the file")
+	if _, err := os.Stat(app.ConfigPath); err == nil || len(srv.CallsTo("ListPuppets")) != 0 {
+		t.Fatalf("wrote the file (%v) or sent the input to the hub", err)
 	}
 }
 
