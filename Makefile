@@ -36,4 +36,15 @@ licenses:
 tidy:
 	go mod tidy -diff
 
-check: tidy fmt vet lint licenses test
+# ci-pins fails unless every sibling checkout in ci.yml takes its ref from the
+# ref file make check builds against, so CI and make check cannot pin
+# different tags.
+ci-pins:
+	@for m in contract client; do \
+		grep -q "$$m=\$$(cat [^)]*\.$$m-ref)\" >> \"\$$GITHUB_OUTPUT\"" .github/workflows/ci.yml && \
+		grep -q "ref: \$${{ steps.pins.outputs.$$m }}" .github/workflows/ci.yml || \
+		{ echo "ci.yml must check out sock-$$m at the tag in .$$m-ref (steps.pins.outputs.$$m)" >&2; exit 1; }; \
+	done
+	@! grep -Eq '^ *ref: [^$$]' .github/workflows/ci.yml || { echo 'ci.yml hardcodes a ref; read it from a ref file' >&2; exit 1; }
+
+check: ci-pins tidy fmt vet lint licenses test
