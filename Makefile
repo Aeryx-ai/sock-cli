@@ -20,6 +20,9 @@ PINS ?= $(PINNED)
 ifneq ($(PINS),)
 export GOWORK := $(CURDIR)/.pins/go.work
 TIDY_FLAGS := -modfile=$(CURDIR)/.pins/go.mod
+else
+# off, not unset: the make that ran check-head exported the pinned one
+export GOWORK := off
 endif
 
 # Never touches the sibling checkout's HEAD, index or working tree: a tag the
