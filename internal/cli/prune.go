@@ -5,11 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
-	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/guygrigsby/sock-cli/internal/config"
 	client "github.com/guygrigsby/sock-client"
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 )
@@ -94,7 +93,7 @@ func newPuppetPruneCmd(app *App) *cobra.Command {
 				id := pw.GetPuppet().GetId()
 				_, err := unary(ctx, app, c.Identity.ErasePuppet, &sockv1.ErasePuppetRequest{PuppetId: id})
 				if err != nil && client.Reason(err) != sockv1.ErrorReason_ERROR_REASON_NOT_FOUND {
-					_, _ = fmt.Fprintf(stderr, "could not erase %s: %v\n", id, err)
+					_, _ = fmt.Fprintln(stderr, line(fmt.Sprintf("could not erase %s: %v", id, err)))
 					failed++
 					continue
 				}
@@ -131,7 +130,7 @@ func (a *App) machineKeyPuppets(ctx context.Context, stderr io.Writer) (ids map[
 	if err != nil {
 		return nil, false, err
 	}
-	if !sameServer(cfg.URL, session.URL) {
+	if !config.SameServer(cfg.URL, session.URL) {
 		return nil, true, nil
 	}
 	list, err := client.NewPuppetAPI(client.New(cfg, a.userAgent()), a.Retrier).ListPuppets(ctx)
@@ -147,16 +146,4 @@ func (a *App) machineKeyPuppets(ctx context.Context, stderr io.Writer) (ids map[
 		ids[p.ID] = true
 	}
 	return ids, false, nil
-}
-
-// sameServer reports whether two server URLs name one server: scheme and host
-// without case, the path without a trailing slash.
-func sameServer(a, b string) bool {
-	ua, errA := url.Parse(a)
-	ub, errB := url.Parse(b)
-	if errA != nil || errB != nil {
-		return false
-	}
-	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host) &&
-		strings.TrimRight(ua.Path, "/") == strings.TrimRight(ub.Path, "/")
 }

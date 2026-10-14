@@ -88,6 +88,12 @@ func newMachineKeyUseCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// before the key leaves: never to a server the file does not name
+			if why, err := config.PuppetFileConflict(app.ConfigPath, cfg.URL, cfg.AccessGate); err != nil {
+				return err
+			} else if why != "" {
+				return errors.New(why)
+			}
 			// sock-mcp sends the key to the url saved with it: a key from
 			// another hub must not be saved beside this one's url
 			cfg.Token = key

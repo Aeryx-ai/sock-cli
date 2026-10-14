@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,49 +54,44 @@ func DefaultPath(getenv func(string) string) (string, error) {
 // SOCK_URL, --url or SOCK_ACCESS_GATE naming another is refused. One source,
 // never a mix, so a repo's .envrc cannot redirect the session.
 func Load(s Sources) (Config, error) {
-	c := Config{Config: client.Config{URL: DefaultURL}}
+	var c Config
 	f, err := client.LoadFileConfig(s.Path)
 	if err != nil {
 		return Config{}, err
 	}
-	if f.URL != "" {
-		c.URL = f.URL
+	fileURL, fileGate := f.URL, strings.TrimSpace(f.AccessGate)
+	if fileURL == "" {
+		fileURL = DefaultURL
 	}
-	c.Token = f.Token
-	c.AccessGate = f.AccessGate
+	c.URL = fileURL
 	if v := s.Getenv("SOCK_URL"); v != "" {
 		c.URL = v
-	}
-	if v := s.Getenv("SOCK_TOKEN"); v != "" {
-		c.Token = v
-	}
-	if v := s.Getenv("SOCK_ACCESS_GATE"); v != "" {
-		c.AccessGate = v
 	}
 	if s.FlagURL != "" {
 		c.URL = s.FlagURL
 	}
+	c.Token = s.Getenv("SOCK_TOKEN")
 	if s.FlagToken != "" {
 		c.Token = s.FlagToken
+	}
+	// The file's gate goes only to the file's server.
+	c.AccessGate = s.Getenv("SOCK_ACCESS_GATE")
+	if c.AccessGate == "" && SameServer(c.URL, fileURL) {
+		c.AccessGate = fileGate
 	}
 	// A trailing newline from a secret file or `$(cat ...)` is not part of the value.
 	c.Token = strings.TrimSpace(c.Token)
 	c.AccessGate = strings.TrimSpace(c.AccessGate)
 	if s.FileTokenOnly || (s.FlagToken == "" && s.Getenv("SOCK_TOKEN") == "") {
-		c.Token = strings.TrimSpace(f.Token)
-		if c.Token != "" {
-			fileURL, fileGate := f.URL, strings.TrimSpace(f.AccessGate)
-			if fileURL == "" {
-				fileURL = DefaultURL
+		c.Token = ""
+		if fileToken := strings.TrimSpace(f.Token); fileToken != "" {
+			switch why := mixedSources(s, fileURL, fileGate); {
+			case why == "":
+				c.Token, c.URL, c.AccessGate = fileToken, fileURL, fileGate
+			case !s.Anonymous:
+				return Config{}, fmt.Errorf("%s holds the token, so the server comes from it too, but %s; unset it, or set url and access_gate in the file", s.Path, why)
 			}
-			if why := mixedSources(s, fileURL, fileGate); why != "" {
-				if !s.Anonymous {
-					return Config{}, fmt.Errorf("%s holds the token, so the server comes from it too, but %s; unset it, or set url and access_gate in the file", s.Path, why)
-				}
-				c.Token = "" // the caller names another server: never pair them
-			} else {
-				c.URL, c.AccessGate = fileURL, fileGate
-			}
+			// anonymous and another server named: the token is left out
 		}
 	}
 	if err := validate(c, s.Anonymous); err != nil {
@@ -108,9 +104,9 @@ func Load(s Sources) (Config, error) {
 // server other than fileURL and fileGate, or "" when none does.
 func mixedSources(s Sources, fileURL, fileGate string) string {
 	switch {
-	case s.FlagURL != "" && s.FlagURL != fileURL:
+	case s.FlagURL != "" && !SameServer(s.FlagURL, fileURL):
 		return "--url names another server"
-	case s.Getenv("SOCK_URL") != "" && s.Getenv("SOCK_URL") != fileURL:
+	case s.Getenv("SOCK_URL") != "" && !SameServer(s.Getenv("SOCK_URL"), fileURL):
 		return "SOCK_URL names another server"
 	case s.Getenv("SOCK_ACCESS_GATE") != "" && strings.TrimSpace(s.Getenv("SOCK_ACCESS_GATE")) != fileGate:
 		return "SOCK_ACCESS_GATE names another gate"
@@ -250,7 +246,7 @@ func PuppetFileConflict(path, url, gate string) (string, error) {
 // serverConflict says why a credential for url and gate cannot sit in a file
 // naming fileURL and fileGate, or "" when it can.
 func serverConflict(fileURL, fileGate, url, gate string) string {
-	if fileURL != "" && fileURL != url {
+	if fileURL != "" && !SameServer(fileURL, url) {
 		return "the config file's url differs from the server this command is using; unset SOCK_URL and --url, or change url in the file"
 	}
 	if fileGate != "" && fileGate != gate {
@@ -314,4 +310,16 @@ func rewrite(path string, edit func(map[string]any) error) error {
 		return fmt.Errorf("config: replace %s: %w", path, err)
 	}
 	return nil
+}
+
+// SameServer reports whether two server URLs name one server: scheme and host
+// without case, the path without a trailing slash.
+func SameServer(a, b string) bool {
+	ua, errA := url.Parse(a)
+	ub, errB := url.Parse(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host) &&
+		strings.TrimRight(ua.Path, "/") == strings.TrimRight(ub.Path, "/")
 }

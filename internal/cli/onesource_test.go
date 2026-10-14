@@ -64,3 +64,17 @@ func TestLoginRecordsItsServer(t *testing.T) {
 		t.Fatal("login saved a token for another server")
 	}
 }
+
+// machine-key use checks the file's server before the key leaves: the key
+// and the file's gate never go to a SOCK_URL the file does not name.
+func TestMachineKeyUseChecksTheFileServerFirst(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	writeConfig(t, app, "url = \"https://file.example\"\naccess_gate = \"fg\"\n")
+	if _, _, err := run(t, app, strings.NewReader(socktest.MachineKeyToken+"\n"), "machine-key", "use"); err == nil {
+		t.Fatal("machine-key use saved a key for another server")
+	}
+	if n := len(srv.CallsTo("ListPuppets")); n != 0 {
+		t.Fatalf("%d ListPuppets calls reached SOCK_URL", n)
+	}
+}

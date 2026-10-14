@@ -35,8 +35,11 @@ func TestFileTokenTakesTheFileServer(t *testing.T) {
 		"same env url":     {Sources{FlagURL: "https://file.example", Getenv: env(map[string]string{"SOCK_URL": "https://file.example", "SOCK_ACCESS_GATE": "fg"}), Path: withURL}, "https://file.example", "fg"},
 		"default url":      {Sources{Getenv: env(map[string]string{"SOCK_URL": DefaultURL}), Path: noURL}, DefaultURL, ""},
 		"file token only":  {Sources{FileTokenOnly: true, FlagToken: "sock_st_flag", Getenv: env(map[string]string{"SOCK_TOKEN": "sock_st_env"}), Path: withURL}, "https://file.example", "fg"},
-		"env token mixes":  {Sources{Getenv: env(map[string]string{"SOCK_TOKEN": "sock_st_env", "SOCK_URL": "https://env.example"}), Path: withURL}, "https://env.example", "fg"},
-		"anonymous, other": {Sources{Anonymous: true, Getenv: env(map[string]string{"SOCK_URL": "https://env.example"}), Path: withURL}, "https://env.example", "fg"},
+		"env token mixes":  {Sources{Getenv: env(map[string]string{"SOCK_TOKEN": "sock_st_env", "SOCK_URL": "https://env.example"}), Path: withURL}, "https://env.example", ""},
+		"env token, file":  {Sources{Getenv: env(map[string]string{"SOCK_TOKEN": "sock_st_env", "SOCK_URL": "https://file.example"}), Path: withURL}, "https://file.example", "fg"},
+		"env token, gate":  {Sources{Getenv: env(map[string]string{"SOCK_TOKEN": "sock_st_env", "SOCK_URL": "https://env.example", "SOCK_ACCESS_GATE": "eg"}), Path: withURL}, "https://env.example", "eg"},
+		"anonymous, other": {Sources{Anonymous: true, Getenv: env(map[string]string{"SOCK_URL": "https://env.example"}), Path: withURL}, "https://env.example", ""},
+		"same server":      {Sources{Getenv: env(map[string]string{"SOCK_URL": "https://FILE.example/"}), Path: withURL}, "https://file.example", "fg"},
 	} {
 		got, err := Load(c.src)
 		if err != nil || got.URL != c.url || got.AccessGate != c.gate {
@@ -78,6 +81,25 @@ func TestRewriteParseErrorHidesContents(t *testing.T) {
 		}
 		if err := RemoveToken(p); err == nil || strings.Contains(err.Error(), "hunter2") {
 			t.Errorf("%q: %v", body, err)
+		}
+	}
+}
+
+func TestSameServer(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"https://x.example", "HTTPS://X.example/", true},
+		{"https://x.example/hub", "https://x.example/hub/", true},
+		{"https://x.example", "https://y.example", false},
+		{"https://x.example", "http://x.example", false},
+		{"https://x.example:8443", "https://x.example", false},
+		{"https://x.example/a", "https://x.example/b", false},
+		{"%zz", "%zz", false},
+	} {
+		if got := SameServer(c.a, c.b); got != c.want {
+			t.Errorf("SameServer(%q, %q) = %v", c.a, c.b, got)
 		}
 	}
 }
