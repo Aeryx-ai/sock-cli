@@ -92,11 +92,12 @@ func equalJitter(d time.Duration) time.Duration {
 	return half + rand.N(d-half+1)
 }
 
-// runShell runs cmdline with /bin/sh -c.
+// runShell runs cmdline with /bin/sh -c, in an environment without sock's
+// credentials: a prompt-injected child must not read the token or gate.
 func runShell(ctx context.Context, cmdline string, stdin []byte, env []string, stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", cmdline)
 	cmd.Stdin = bytes.NewReader(stdin)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(client.ScrubSecrets(os.Environ()), env...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return cmd.Run()
