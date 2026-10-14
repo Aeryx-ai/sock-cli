@@ -26,6 +26,9 @@ import (
 // Token is the puppet bearer token the fake accepts.
 const Token = "sock_pt_testdevice_testsecret"
 
+// MachineKeyToken is a machine key the fake accepts (ADR 10).
+const MachineKeyToken = "sock_mk_mkdevice_mksecret"
+
 // HumanDeviceID is the device inside HumanToken.
 const HumanDeviceID = "0a0a0a0a-0000-4000-8000-000000000001"
 
@@ -152,7 +155,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if a := r.Header.Get("Authorization"); a != "Bearer "+Token && a != "Bearer "+HumanToken {
+		if a := r.Header.Get("Authorization"); a != "Bearer "+Token && a != "Bearer "+HumanToken && a != "Bearer "+MachineKeyToken {
 			err := withReason(connect.NewError(connect.CodeUnauthenticated, errors.New("token rejected")), sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID)
 			_ = connect.NewErrorWriter().Write(w, r, err)
 			return

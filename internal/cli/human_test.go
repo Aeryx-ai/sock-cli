@@ -467,3 +467,70 @@ func TestPuppetsUseSavesTheMintingGate(t *testing.T) {
 		t.Fatalf("file %+v, %v", f, err)
 	}
 }
+
+func TestMachineKeyCreatePrintsTheKeyAlone(t *testing.T) {
+	app, srv := signedIn(t)
+	out, errOut := mustRun(t, app, "machine-key", "create", "--label", "mac")
+	if out != "sock_mk_device-mk_secret\n" || !strings.Contains(errOut, "device device-mk") {
+		t.Fatalf("stdout %q stderr %q", out, errOut)
+	}
+	if req := lastRequest[*sockv1.MintMachineKeyRequest](t, srv, "MintMachineKey"); req.GetLabel() != "mac" {
+		t.Fatalf("request %v", req)
+	}
+	if _, _, err := run(t, app, nil, "machine-key", "create"); err == nil {
+		t.Fatal("create without --label accepted")
+	}
+}
+
+func ensureApp(t *testing.T, srv *socktest.Server, token string) (*App, string) {
+	t.Helper()
+	state := filepath.Join(t.TempDir(), "state")
+	return humanApp(t, srv, map[string]string{"SOCK_TOKEN": token, "XDG_STATE_HOME": state, "HOME": t.TempDir()}), state
+}
+
+// `puppets ensure` makes the project's puppet and prints where its token is
+// kept, never the token: the hook reads the file.
+func TestPuppetsEnsureMintsOnceAndPrintsOnlyThePath(t *testing.T) {
+	srv := socktest.New(t)
+	app, state := ensureApp(t, srv, socktest.MachineKeyToken)
+	dir := filepath.Join(t.TempDir(), "myproj")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut := mustRun(t, app, "puppets", "ensure", dir)
+	path := strings.TrimSpace(out)
+	if strings.Contains(out+errOut, "sock_pt_") || !strings.HasPrefix(path, filepath.Join(state, "sock-integrations", "puppets")) {
+		t.Fatalf("stdout %q stderr %q", out, errOut)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || strings.TrimSpace(string(b)) != "sock_pt_device-new_secret" {
+		t.Fatalf("token file %q: %v", b, err)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", fi.Mode())
+	}
+	creates := srv.CallsTo("CreatePuppet")
+	if len(creates) != 1 || !strings.HasPrefix(creates[0].Msg.(*sockv1.CreatePuppetRequest).GetName(), "myproj on ") {
+		t.Fatalf("creates %v", creates)
+	}
+	if got := creates[0].Header.Get("Authorization"); got != "Bearer "+socktest.MachineKeyToken {
+		t.Fatalf("authorization %q", got)
+	}
+	if out2, _ := mustRun(t, app, "puppets", "ensure", dir); out2 != out || len(srv.CallsTo("CreatePuppet")) != 1 {
+		t.Fatalf("second ensure printed %q, creates %d", out2, len(srv.CallsTo("CreatePuppet")))
+	}
+}
+
+func TestPuppetsEnsureNeedsAMachineKey(t *testing.T) {
+	for _, tok := range []string{socktest.HumanToken, socktest.Token} {
+		srv := socktest.New(t)
+		app, _ := ensureApp(t, srv, tok)
+		_, _, err := run(t, app, nil, "puppets", "ensure", t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "machine key") {
+			t.Fatalf("token %s...: %v", tok[:8], err)
+		}
+		if len(srv.CallsTo("CreatePuppet")) != 0 {
+			t.Fatal("minted with a token that is not a machine key")
+		}
+	}
+}

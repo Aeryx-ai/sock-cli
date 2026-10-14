@@ -162,7 +162,7 @@ func NewRoot(app *App) *cobra.Command {
 	pf.BoolVar(&app.jsonOut, "json", false, "print as JSON lines")
 	root.AddCommand(newLoginCmd(app), newRegisterCmd(app), newLogoutCmd(app),
 		newWhoamiCmd(app), newTermsCmd(app), newNameCmd(app), newHandleCmd(app), newAccountsCmd(app), newAccountCmd(app),
-		newDevicesCmd(app), newPuppetsCmd(app),
+		newDevicesCmd(app), newPuppetsCmd(app), newMachineKeyCmd(app),
 		newConversationsCmd(app), newSendCmd(app), newListenCmd(app), newFetchCmd(app), newAckCmd(app),
 		newBlockCmd(app), newUnblockCmd(app), newBlocksCmd(app), newReportCmd(app), newExportCmd(app))
 	return root

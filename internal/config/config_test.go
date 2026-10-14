@@ -94,7 +94,7 @@ func TestValidation(t *testing.T) {
 		{"no token", "https://x.example", "", "no token"},
 		{"whitespace only token", "https://x.example", " \t\n", "no token"},
 		{"internal whitespace token", "https://x.example", "sock_pt_abc def", "whitespace"},
-		{"bad prefix", "https://x.example", "ghp_abc", "token must start with sock_pt_ or sock_st_"},
+		{"bad prefix", "https://x.example", "ghp_abc", "token must start with sock_pt_, sock_st_ or sock_mk_"},
 		{"plain http remote", "http://x.example", tok, "https"},
 		{"http loopback ok", "http://127.0.0.1:9", tok, ""},
 		{"http localhost ok", "http://localhost:9", tok, ""},

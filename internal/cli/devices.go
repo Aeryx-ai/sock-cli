@@ -101,7 +101,7 @@ func newPuppetsCmd(app *App) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.AddCommand(newPuppetCreateCmd(app), newPuppetTokenCmd(app), newPuppetUseCmd(app), newPuppetEraseCmd(app))
+	cmd.AddCommand(newPuppetCreateCmd(app), newPuppetTokenCmd(app), newPuppetUseCmd(app), newPuppetEnsureCmd(app), newPuppetEraseCmd(app))
 	return cmd
 }
 
