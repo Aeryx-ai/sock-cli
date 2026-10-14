@@ -18,6 +18,7 @@ import (
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/protowire"
 
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 
@@ -993,5 +994,53 @@ func TestSendRetryBudgetBoundsRetryAfter(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "gave up after 50ms") {
 		t.Fatalf("err %v, want it to say it gave up after 50ms", err)
+	}
+}
+
+// nonMessageEvents are the Subscribe events listen must pass over: a read
+// marker (ADR 9), an event with no kind set, and a kind from a newer contract
+// (field 99, unknown to this build).
+func nonMessageEvents() []*sockv1.SubscribeResponse {
+	future := &sockv1.SubscribeResponse{}
+	future.ProtoReflect().SetUnknown(protowire.AppendBytes(protowire.AppendTag(nil, 99, protowire.BytesType), []byte("x")))
+	return []*sockv1.SubscribeResponse{
+		{Event: &sockv1.SubscribeResponse_ReadMarker{ReadMarker: &sockv1.ReadMarker{ConversationId: "c-1", ReadThroughSeq: 7}}},
+		{},
+		future,
+	}
+}
+
+// A stream carrying read markers and events listen does not know delivers
+// only its messages, on the same connection, and says nothing about the rest.
+func TestListenSkipsReadMarkersAndUnknownEvents(t *testing.T) {
+	for _, args := range [][]string{nil, {"--exec", "handle-it"}} {
+		t.Run(fmt.Sprint(args), func(t *testing.T) {
+			srv := socktest.New(t)
+			srv.Streams = []socktest.StreamScript{{
+				Events: append(nonMessageEvents(), socktest.Event(socktest.Text("m-1", "c-1", 1, "after"))),
+				Hold:   true,
+			}}
+			app := testApp(t, srv)
+			var execs atomic.Int32
+			app.RunExec = func(context.Context, string, []byte, []string, io.Writer, io.Writer) error {
+				execs.Add(1)
+				return nil
+			}
+			acked := ackedCount(srv)
+			out, errOut, err := listenUntil(t, app, func() bool { return acked() == 1 }, args...)
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			_, ids, _, subs := srv.Snapshot()
+			if subs != 1 || !slices.Equal(ids, []string{"m-1"}) || errOut != "" {
+				t.Fatalf("subscribes %d, acked %v, stderr %q", subs, ids, errOut)
+			}
+			if args == nil && (strings.Count(out, "\n") != 1 || !strings.Contains(out, "after")) {
+				t.Fatalf("output %q", out)
+			}
+			if args != nil && execs.Load() != 1 {
+				t.Fatalf("exec ran %d times, want 1", execs.Load())
+			}
+		})
 	}
 }
