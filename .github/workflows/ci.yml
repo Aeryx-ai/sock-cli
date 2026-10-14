@@ -6,9 +6,15 @@ on:
     paths-ignore: ['.beads/**', 'docs/**', '**/*.md']
   pull_request:
     paths-ignore: ['.beads/**', 'docs/**', '**/*.md']
+# one run per ref: a newer push cancels the older run (Actions minutes are capped)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
