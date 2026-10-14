@@ -48,7 +48,7 @@ func pruneHub(t *testing.T, fileURL func(srv *socktest.Server) string, machineKe
 	return app, srv
 }
 
-func sameServer(srv *socktest.Server) string { return srv.URL }
+func thisServer(srv *socktest.Server) string { return srv.URL }
 
 func erasedIDs(srv *socktest.Server) []string {
 	var out []string
@@ -62,7 +62,7 @@ func erasedIDs(srv *socktest.Server) []string {
 // system or connector puppet, and with no token unless --with-tokens; typed
 // yes erases it
 func TestPuppetsPruneErasesAfterConfirmation(t *testing.T) {
-	app, srv := pruneHub(t, sameServer, socktest.MachineKeyToken)
+	app, srv := pruneHub(t, thisServer, socktest.MachineKeyToken)
 	app.StdinIsTTY = func() bool { return true }
 	out, errOut, err := run(t, app, strings.NewReader("yes\n"), "puppets", "prune")
 	if err != nil {
@@ -85,7 +85,7 @@ func TestPuppetsPruneErasesAfterConfirmation(t *testing.T) {
 }
 
 func TestPuppetsPruneWithTokensAndYes(t *testing.T) {
-	app, srv := pruneHub(t, sameServer, socktest.MachineKeyToken)
+	app, srv := pruneHub(t, thisServer, socktest.MachineKeyToken)
 	mustRun(t, app, "puppets", "prune", "--yes", "--with-tokens")
 	if got := erasedIDs(srv); !slices.Equal(got, []string{"p-old", "p-tok"}) {
 		t.Fatalf("erased %v", got)
@@ -94,7 +94,7 @@ func TestPuppetsPruneWithTokensAndYes(t *testing.T) {
 
 func TestPuppetsPruneErasesNothingUnconfirmed(t *testing.T) {
 	t.Run("declined", func(t *testing.T) {
-		app, srv := pruneHub(t, sameServer, socktest.MachineKeyToken)
+		app, srv := pruneHub(t, thisServer, socktest.MachineKeyToken)
 		app.StdinIsTTY = func() bool { return true }
 		if _, _, err := run(t, app, strings.NewReader("y\n"), "puppets", "prune"); err == nil || err.Error() != errNotConfirmed.Error() {
 			t.Fatalf("err = %v", err)
@@ -104,7 +104,7 @@ func TestPuppetsPruneErasesNothingUnconfirmed(t *testing.T) {
 		}
 	})
 	t.Run("off a terminal without --yes", func(t *testing.T) {
-		app, srv := pruneHub(t, sameServer, socktest.MachineKeyToken)
+		app, srv := pruneHub(t, thisServer, socktest.MachineKeyToken)
 		out, _, err := run(t, app, nil, "puppets", "prune")
 		if err == nil || !strings.Contains(err.Error(), "--yes") {
 			t.Fatalf("err = %v", err)
@@ -126,8 +126,8 @@ func TestPuppetsPruneMachineKeyItCannotAsk(t *testing.T) {
 		key string
 	}{
 		"another server": {func(*socktest.Server) string { return "https://other.example" }, socktest.MachineKeyToken},
-		"revoked key":    {sameServer, "sock_mk_revoked_secret"},
-		"no key":         {sameServer, ""},
+		"revoked key":    {thisServer, "sock_mk_revoked_secret"},
+		"no key":         {thisServer, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			app, srv := pruneHub(t, tc.url, tc.key)
@@ -156,7 +156,7 @@ func TestPuppetsPruneNothingToDo(t *testing.T) {
 
 // one failure does not stop the rest; a puppet already gone counts as erased
 func TestPuppetsPruneKeepsGoingAndReportsFailures(t *testing.T) {
-	app, srv := pruneHub(t, sameServer, "")
+	app, srv := pruneHub(t, thisServer, "")
 	srv.Fail = map[string]error{"ErasePuppet": socktest.Error(connect.CodeNotFound, sockv1.ErrorReason_ERROR_REASON_NOT_FOUND)}
 	if _, errOut, err := run(t, app, nil, "puppets", "prune", "--yes"); err != nil {
 		t.Fatalf("%v (stderr %q)", err, errOut)
@@ -177,5 +177,31 @@ func TestPuppetsPruneNeedsASession(t *testing.T) {
 	}
 	if len(srv.Calls) != 0 {
 		t.Fatalf("called %v", srv.Calls)
+	}
+}
+
+// review: the key's server spelled another way is still its server, and a
+// key that cannot be asked is said, and refuses --with-tokens, which would
+// reach its live puppets
+func TestPuppetsPruneMachineKeyURLSpelling(t *testing.T) {
+	app, srv := pruneHub(t, func(srv *socktest.Server) string { return strings.ToUpper(srv.URL[:4]) + srv.URL[4:] + "/" }, socktest.MachineKeyToken)
+	mustRun(t, app, "puppets", "prune", "--yes", "--with-tokens")
+	if got := erasedIDs(srv); !slices.Equal(got, []string{"p-old", "p-tok"}) {
+		t.Fatalf("erased %v", got)
+	}
+}
+
+func TestPuppetsPruneUnaskedKeyRefusesWithTokens(t *testing.T) {
+	app, srv := pruneHub(t, func(*socktest.Server) string { return "https://other.example" }, socktest.MachineKeyToken)
+	_, _, err := run(t, app, nil, "puppets", "prune", "--yes", "--with-tokens")
+	if err == nil || !strings.Contains(err.Error(), "--with-tokens") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := erasedIDs(srv); len(got) != 0 {
+		t.Fatalf("erased %v", got)
+	}
+	_, errOut := mustRun(t, app, "puppets", "prune", "--yes")
+	if !strings.Contains(errOut, "machine_key") {
+		t.Fatalf("stderr %q does not say the key was not asked", errOut)
 	}
 }

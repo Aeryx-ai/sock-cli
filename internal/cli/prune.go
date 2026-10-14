@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -38,9 +41,15 @@ func newPuppetPruneCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			keyed, err := app.machineKeyPuppets(ctx)
+			keyed, unasked, err := app.machineKeyPuppets(ctx, stderr)
 			if err != nil {
 				return err
+			}
+			if unasked {
+				if withTokens {
+					return errors.New("the config file's machine_key is for another server, so its live puppets cannot be told apart; --with-tokens would include them")
+				}
+				_, _ = fmt.Fprintln(stderr, "the config file's machine_key is for another server: its puppets cannot be told apart")
 			}
 			var prune []*sockv1.PuppetWithDevices
 			held := 0
@@ -106,35 +115,48 @@ func newPuppetPruneCmd(app *App) *cobra.Command {
 
 // machineKeyPuppets is the ids of the puppets the config file's machine_key
 // made, asked of the key's own server, and only when that is the server this
-// command speaks to: a key is never sent anywhere else. No key, a key for
-// another server, or a revoked key (its puppets are the owner's alone now)
-// is an empty set.
-func (a *App) machineKeyPuppets(ctx context.Context) (map[string]bool, error) {
+// command speaks to: a key is never sent anywhere else. unasked is a key for
+// another server. No key, or a revoked key (its puppets are the owner's alone
+// now, said on stderr), is an empty set.
+func (a *App) machineKeyPuppets(ctx context.Context, stderr io.Writer) (ids map[string]bool, unasked bool, err error) {
 	session, err := a.load(false)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	// the file alone: machine_key, else puppet_token, with the file's server
 	cfg, err := client.LoadPuppetConfig(client.PuppetOptions{Getenv: func(string) string { return "" }, ConfigPath: a.ConfigPath})
 	if errors.Is(err, client.ErrNoPuppetCredential) || err == nil && client.TokenKind(cfg.Token) != client.KindMachineKey {
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	if cfg.URL != session.URL {
-		return nil, nil
+	if !sameServer(cfg.URL, session.URL) {
+		return nil, true, nil
 	}
 	list, err := client.NewPuppetAPI(client.New(cfg, a.userAgent()), a.Retrier).ListPuppets(ctx)
 	if client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID {
-		return nil, nil
+		_, _ = fmt.Fprintln(stderr, "the server refused the config file's machine_key (revoked?): the puppets it made are yours alone now and may match")
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("list the puppets of the config file's machine_key: %w", client.Describe(err))
+		return nil, false, fmt.Errorf("list the puppets of the config file's machine_key: %w", client.Describe(err))
 	}
-	ids := map[string]bool{}
+	ids = map[string]bool{}
 	for _, p := range list {
 		ids[p.ID] = true
 	}
-	return ids, nil
+	return ids, false, nil
+}
+
+// sameServer reports whether two server URLs name one server: scheme and host
+// without case, the path without a trailing slash.
+func sameServer(a, b string) bool {
+	ua, errA := url.Parse(a)
+	ub, errB := url.Parse(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host) &&
+		strings.TrimRight(ua.Path, "/") == strings.TrimRight(ub.Path, "/")
 }
