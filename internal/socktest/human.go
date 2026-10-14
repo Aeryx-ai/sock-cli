@@ -132,9 +132,12 @@ func (s *Server) MintMachineKey(_ context.Context, req *connect.Request[sockv1.M
 }
 
 // ListPuppets implements the generated handler.
-func (s *Server) ListPuppets(context.Context, *connect.Request[sockv1.ListPuppetsRequest]) (*connect.Response[sockv1.ListPuppetsResponse], error) {
+func (s *Server) ListPuppets(_ context.Context, req *connect.Request[sockv1.ListPuppetsRequest]) (*connect.Response[sockv1.ListPuppetsResponse], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.MachineKeyPuppets != nil && req.Header().Get("Authorization") == "Bearer "+MachineKeyToken {
+		return ok(&sockv1.ListPuppetsResponse{Puppets: s.MachineKeyPuppets})
+	}
 	return ok(&sockv1.ListPuppetsResponse{Puppets: s.Puppets})
 }
 

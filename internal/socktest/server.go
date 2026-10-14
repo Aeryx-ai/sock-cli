@@ -104,7 +104,10 @@ type Server struct {
 	// ListBlockedAccounts'.
 	Devices []*sockv1.Device
 	Puppets []*sockv1.PuppetWithDevices
-	Blocked []*sockv1.BlockedAccount
+	// MachineKeyPuppets, when set, is ListPuppets' answer to MachineKeyToken:
+	// the puppets that key created (ADR 10).
+	MachineKeyPuppets []*sockv1.PuppetWithDevices
+	Blocked           []*sockv1.BlockedAccount
 
 	sockv1connect.UnimplementedIdentityServiceHandler
 	sockv1connect.UnimplementedMessagingServiceHandler

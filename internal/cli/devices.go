@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -81,28 +82,33 @@ func newPuppetsCmd(app *App) *cobra.Command {
 				return err
 			}
 			p := app.printer()
-			w := cmd.OutOrStdout()
 			for _, pw := range res.GetPuppets() {
-				if p.JSON {
-					if err := p.json(w, pw); err != nil {
-						return err
-					}
-					continue
-				}
-				if err := p.Account(w, pw.GetPuppet()); err != nil {
+				if err := printPuppet(p, cmd.OutOrStdout(), pw); err != nil {
 					return err
-				}
-				for _, d := range pw.GetDevices() {
-					if err := p.Device(w, d, false, "  ", sockv1.DeviceKind_DEVICE_KIND_PUPPET_TOKEN); err != nil {
-						return err
-					}
 				}
 			}
 			return nil
 		},
 	}
-	cmd.AddCommand(newPuppetCreateCmd(app), newPuppetTokenCmd(app), newPuppetUseCmd(app), newPuppetEnsureCmd(app), newPuppetEraseCmd(app))
+	cmd.AddCommand(newPuppetCreateCmd(app), newPuppetTokenCmd(app), newPuppetUseCmd(app), newPuppetEnsureCmd(app), newPuppetEraseCmd(app), newPuppetPruneCmd(app))
 	return cmd
+}
+
+// printPuppet is a puppet's account line and its devices indented, or the
+// PuppetWithDevices as one json line.
+func printPuppet(p Printer, w io.Writer, pw *sockv1.PuppetWithDevices) error {
+	if p.JSON {
+		return p.json(w, pw)
+	}
+	if err := p.Account(w, pw.GetPuppet()); err != nil {
+		return err
+	}
+	for _, d := range pw.GetDevices() {
+		if err := p.Device(w, d, false, "  ", sockv1.DeviceKind_DEVICE_KIND_PUPPET_TOKEN); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newPuppetCreateCmd(app *App) *cobra.Command {
