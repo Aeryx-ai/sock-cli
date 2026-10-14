@@ -21,12 +21,10 @@ import (
 // DefaultURL is the public sock hub, used when no flag, env or file names one.
 const DefaultURL = client.DefaultURL
 
-// Config is what every command needs to reach the server.
+// Config is what every command needs to reach the server: client.Config,
+// whose AccessGate is the staging gate resolved from flag, env and file.
 type Config struct {
 	client.Config
-	// AccessGate, when set, is sent as the Sock-Access-Gate header to the
-	// configured server only (staging sits behind it).
-	AccessGate string
 }
 
 // Sources are the inputs to Load, injectable for tests.

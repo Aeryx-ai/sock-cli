@@ -17,21 +17,12 @@ var humanText = map[sockv1.ErrorReason]string{
 	sockv1.ErrorReason_ERROR_REASON_TERMS_NOT_ACCEPTED: "you have not accepted the current terms; run sock terms, then sock terms accept <version>",
 }
 
-// reasonText covers the reasons sock-client has no text for: the ones only
-// human commands meet.
+// reasonText covers the reasons whose text names a sock command: the ones
+// sock-client leaves to the caller, because only this CLI has these commands.
 var reasonText = map[sockv1.ErrorReason]string{
-	sockv1.ErrorReason_ERROR_REASON_APPLE_TOKEN_INVALID:   "Apple's sign-in was refused or has expired; run the command again",
-	sockv1.ErrorReason_ERROR_REASON_NOT_REGISTERED:        "no sock account for this Apple ID; run sock register with an invite",
-	sockv1.ErrorReason_ERROR_REASON_ALREADY_REGISTERED:    "this Apple ID already has a sock account; run sock login",
-	sockv1.ErrorReason_ERROR_REASON_HANDLE_TAKEN:          "that handle is taken",
-	sockv1.ErrorReason_ERROR_REASON_PUPPET_NAME_TAKEN:     "you already have a puppet with that name",
-	sockv1.ErrorReason_ERROR_REASON_INVITE_INVALID:        "the invite code is invalid, expired or already used",
-	sockv1.ErrorReason_ERROR_REASON_NOT_OWNER:             "you do not own that puppet",
-	sockv1.ErrorReason_ERROR_REASON_GROUP_FULL:            "the group is full",
-	sockv1.ErrorReason_ERROR_REASON_OWNER_NOT_MEMBER:      "a puppet's owner must be a member of the conversation too",
-	sockv1.ErrorReason_ERROR_REASON_DIRECT_IMMUTABLE:      "a direct conversation's members cannot change",
-	sockv1.ErrorReason_ERROR_REASON_PEER_NOT_ALLOWED:      "a direct conversation needs a human or one of your own puppets",
-	sockv1.ErrorReason_ERROR_REASON_SUBSCRIPTION_REQUIRED: "this needs Sock Pro; subscribe in the sock app",
+	sockv1.ErrorReason_ERROR_REASON_APPLE_TOKEN_INVALID: "Apple's sign-in was refused or has expired; run the command again",
+	sockv1.ErrorReason_ERROR_REASON_NOT_REGISTERED:      "no sock account for this Apple ID; run sock register with an invite",
+	sockv1.ErrorReason_ERROR_REASON_ALREADY_REGISTERED:  "this Apple ID already has a sock account; run sock login",
 }
 
 // rewritten is an error with new text that still unwraps to the original,
