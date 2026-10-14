@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -176,5 +177,70 @@ func TestSendAsPuppetFlagMisuse(t *testing.T) {
 	}
 	if len(srv.Calls) != 0 {
 		t.Fatalf("called %v", srv.Calls)
+	}
+}
+
+// the hook sends on every turn (sock-cli-7ut): a cached project puppet token
+// is used without asking the hub first, and a token the hub rejects (the
+// puppet was erased) is checked, replaced and the message sent once more
+func TestSendAsPuppetTrustsTheCachedTokenAndRecoversWhenItIsRejected(t *testing.T) {
+	srv := socktest.New(t)
+	proj := repo(t, filepath.Join(t.TempDir(), "hookproj"))
+	file := fmt.Sprintf("url = %q\nmachine_key = %q\n", srv.URL, socktest.MachineKeyToken)
+	state := filepath.Join(t.TempDir(), "state")
+	app := puppetApp(t, srv, map[string]string{"XDG_STATE_HOME": state}, file)
+	send := func(text string) {
+		t.Helper()
+		out, _, err := run(t, app, strings.NewReader(text), "send", "--as-puppet", "--project", proj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasSuffix(out, ": "+text+"\n") || strings.Count(out, "\n") != 1 {
+			t.Fatalf("stdout %q", out)
+		}
+	}
+	send("one")
+	send("two")
+	if n := len(srv.CallsTo("GetMe")); n != 0 {
+		t.Fatalf("checked the cached token %d times", n)
+	}
+	// the puppet was erased in the app: its cached token is dead
+	cached, err := filepath.Glob(filepath.Join(state, "sock-integrations", "puppets", "*", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tokenFile string
+	for _, f := range cached {
+		if b, err := os.ReadFile(f); err == nil && strings.TrimSpace(string(b)) == "sock_pt_device-new_secret" {
+			tokenFile = f
+		}
+	}
+	if tokenFile == "" {
+		t.Fatalf("no cached token among %v", cached)
+	}
+	if err := os.WriteFile(tokenFile, []byte("sock_pt_gone_secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	send("three")
+	// the fake refuses the dead token before recording a call
+	got := notifiedAs(srv)
+	if want := []string{"sock_pt_device-new_secret", "sock_pt_device-new_secret", "sock_pt_device-new_secret"}; !slices.Equal(got, want) {
+		t.Fatalf("sent as %q, want %q", got, want)
+	}
+	if n := len(srv.CallsTo("CreatePuppet")); n != 2 {
+		t.Fatalf("%d creates, want a new puppet after the rejection", n)
+	}
+}
+
+// a rejected token that is not a project puppet's is not retried
+func TestSendAsPuppetRejectedPuppetTokenIsNotRetried(t *testing.T) {
+	srv := socktest.New(t)
+	app := puppetApp(t, srv, map[string]string{"SOCK_URL": srv.URL, "SOCK_TOKEN": "sock_pt_gone_secret"}, "")
+	if _, _, err := run(t, app, strings.NewReader("hi"), "send", "--as-puppet"); err == nil {
+		t.Fatal("sent with a rejected token")
+	}
+	// the fake refuses it before recording a call: count requests
+	if _, _, agents, _ := srv.Snapshot(); len(agents) != 1 {
+		t.Fatalf("%d requests, want one", len(agents))
 	}
 }

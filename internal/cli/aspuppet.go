@@ -18,23 +18,45 @@ const (
 
 // puppetClients speaks as the puppet sock-mcp would in project (the directory
 // sock-mcp starts in; "" is the working directory): sock-client's
-// ResolvePuppet, the one decision both share. The human's token is never
-// used. Lines from making the project's puppet go to stderr.
-func (a *App) puppetClients(ctx context.Context, project string, stderr io.Writer) (Clients, error) {
+// LoadPuppetConfig and ProjectPuppet, the decision ResolvePuppet shares with
+// sock-mcp. The human's token is never used. Lines from making the project's
+// puppet go to stderr. A cached project puppet token is used without asking
+// the hub first (sock-cli-7ut); for a machine key, recheck resolves again with
+// that check, replacing the token of an erased puppet, and is for a call the
+// hub answered TOKEN_INVALID. It is nil for any other credential.
+func (a *App) puppetClients(ctx context.Context, project string, stderr io.Writer) (c Clients, recheck func(context.Context) (Clients, error), err error) {
 	if a.flagToken != "" || a.flagURL != "" {
-		return Clients{}, errors.New("--as-puppet takes the server and credential as sock-mcp does, from SOCK_TOKEN or the config file; drop --token and --url")
+		return Clients{}, nil, errors.New("--as-puppet takes the server and credential as sock-mcp does, from SOCK_TOKEN or the config file; drop --token and --url")
 	}
-	cfg, err := client.ResolvePuppet(ctx, client.PuppetOptions{
+	o := client.PuppetOptions{
 		Getenv:        a.Getenv,
 		ConfigPath:    a.ConfigPath,
 		WorkDir:       project,
 		NoProjectHint: "set CLAUDE_PROJECT_DIR or pass --project the project's repository",
 		UserAgent:     a.userAgent(),
 		Log:           func(f string, args ...any) { _, _ = fmt.Fprintf(stderr, "sock: "+f+"\n", args...) },
-	})
-	if errors.Is(err, client.ErrNoPuppetCredential) {
-		return Clients{}, errors.New(errNoPuppetCredential)
+		TrustCache:    true,
 	}
+	cfg, err := client.LoadPuppetConfig(o)
+	if errors.Is(err, client.ErrNoPuppetCredential) {
+		return Clients{}, nil, errors.New(errNoPuppetCredential)
+	}
+	if err != nil {
+		return Clients{}, nil, err
+	}
+	if client.TokenKind(cfg.Token) == client.KindMachineKey {
+		recheck = func(ctx context.Context) (Clients, error) {
+			o.TrustCache = false
+			return a.projectPuppetClients(ctx, cfg, o)
+		}
+	}
+	c, err = a.projectPuppetClients(ctx, cfg, o)
+	return c, recheck, err
+}
+
+// projectPuppetClients is ProjectPuppet's puppet for cfg, as the caller.
+func (a *App) projectPuppetClients(ctx context.Context, cfg client.Config, o client.PuppetOptions) (Clients, error) {
+	cfg, err := client.ProjectPuppet(ctx, cfg, o)
 	if err != nil {
 		return Clients{}, err
 	}

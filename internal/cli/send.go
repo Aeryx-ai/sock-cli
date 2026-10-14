@@ -12,6 +12,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
+	client "github.com/guygrigsby/sock-client"
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 )
 
@@ -35,9 +36,12 @@ func newSendCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var c Clients
+			var (
+				c       Clients
+				recheck func(context.Context) (Clients, error)
+			)
 			if asPuppet {
-				c, err = app.puppetClients(cmd.Context(), project, cmd.ErrOrStderr())
+				c, recheck, err = app.puppetClients(cmd.Context(), project, cmd.ErrOrStderr())
 			} else {
 				c, err = app.clients()
 			}
@@ -48,7 +52,7 @@ func newSendCmd(app *App) *cobra.Command {
 				return errors.New("a human must pass --conversation; without it send goes to a puppet's owner")
 			}
 			key := rand.Text() // one key per invocation, reused by every retry
-			msg, err := call(cmd.Context(), app, func(ctx context.Context) (*sockv1.Message, error) {
+			send := func(ctx context.Context) (*sockv1.Message, error) {
 				if conversation == "" {
 					res, err := c.Messaging.NotifyOwner(ctx, connect.NewRequest(&sockv1.NotifyOwnerRequest{Text: text, IdempotencyKey: key}))
 					if err != nil {
@@ -61,7 +65,16 @@ func newSendCmd(app *App) *cobra.Command {
 					return nil, err
 				}
 				return res.Msg.GetMessage(), nil
-			})
+			}
+			msg, err := call(cmd.Context(), app, send)
+			// the cached project puppet token was used unchecked: the puppet
+			// was erased, so check, replace and send once more
+			if recheck != nil && client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID {
+				if c, err = recheck(cmd.Context()); err != nil {
+					return err
+				}
+				msg, err = call(cmd.Context(), app, send)
+			}
 			if err != nil {
 				return err
 			}
