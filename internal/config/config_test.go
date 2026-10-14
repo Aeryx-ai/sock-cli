@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	client "github.com/guygrigsby/sock-client"
 )
 
 func env(m map[string]string) func(string) string {
@@ -304,4 +306,26 @@ func TestSetNewTokenRefusesExistingToken(t *testing.T) {
 	if tok, _ := FileToken(fresh); tok != "sock_st_dev_secret" {
 		t.Fatalf("token %q", tok)
 	}
+}
+
+// sock-cli-kgh: the machine key sock-mcp reads when its environment has none
+func TestSetMachineKeyRefusesAnotherWithoutForce(t *testing.T) {
+	p := writeFile(t, 0o600, "token = \"sock_st_h_secret\"\nmachine_key = \"sock_mk_old_secret\"\n")
+	if err := SetMachineKey(p, "sock_mk_new_secret", "https://x.example", "", false); !errors.Is(err, ErrMachineKeyExists) {
+		t.Fatalf("got %v, want ErrMachineKeyExists", err)
+	}
+	if f, _ := client.LoadFileConfig(p); f.MachineKey != "sock_mk_old_secret" {
+		t.Fatalf("overwritten: %+v", f)
+	}
+	if err := SetMachineKey(p, "sock_mk_old_secret", "https://x.example", "", false); err != nil {
+		t.Fatalf("the same key again: %v", err)
+	}
+	if err := SetMachineKey(p, "sock_mk_new_secret", "https://x.example", "g", true); err != nil {
+		t.Fatalf("--force: %v", err)
+	}
+	f, err := client.LoadFileConfig(p)
+	if err != nil || f.MachineKey != "sock_mk_new_secret" || f.Token != "sock_st_h_secret" || f.URL != "https://x.example" || f.AccessGate != "g" {
+		t.Fatalf("file %+v, %v", f, err)
+	}
+	assertMode(t, p, 0o600)
 }

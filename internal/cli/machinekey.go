@@ -5,12 +5,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
 	client "github.com/guygrigsby/sock-client"
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
+
+	"github.com/guygrigsby/sock-cli/internal/config"
 )
 
 func newMachineKeyCmd(app *App) *cobra.Command {
@@ -40,7 +45,56 @@ func newMachineKeyCmd(app *App) *cobra.Command {
 	}
 	create.Flags().StringVar(&label, "label", "", "what the key is for, usually this host (required)")
 	_ = create.MarkFlagRequired("label") // the flag exists: registered above
-	cmd.AddCommand(create)
+	cmd.AddCommand(create, newMachineKeyUseCmd(app))
+	return cmd
+}
+
+// newMachineKeyUseCmd keeps a machine key in the config file as machine_key,
+// where sock-mcp reads it when its environment has none. The key comes on
+// stdin, never argv (visible in ps), and is never printed.
+func newMachineKeyUseCmd(app *App) *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "use",
+		Short: "Keep a machine key from stdin for sock-mcp",
+		Long: "Read a machine key (sock_mk_…) from stdin and write it to the config file as machine_key (mode 600), where " +
+			"sock-mcp reads it when SOCK_TOKEN is not set (a Codex plugin starts it without your environment) and makes " +
+			"each project its own puppet. sock-mcp takes SOCK_TOKEN first, then machine_key, then puppet_token. Pipe it: " +
+			"sock machine-key create --label <host> | sock machine-key use. Another machine_key in the file needs --force. " +
+			"The key is not printed.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if app.StdinIsTTY() {
+				return errors.New("pipe the key in, so it is not echoed: sock machine-key create --label <host> | sock machine-key use")
+			}
+			b, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), 4096))
+			if err != nil {
+				return fmt.Errorf("read the machine key: %w", err)
+			}
+			key := strings.TrimSpace(string(b))
+			if client.TokenKind(key) != client.KindMachineKey || strings.ContainsFunc(key, unicode.IsSpace) {
+				return errors.New("stdin is not one machine key (sock_mk_…); mint one with sock machine-key create")
+			}
+			cfg, err := app.load(true)
+			if err != nil {
+				return err
+			}
+			// sock-mcp sends the key to the url in the file
+			if why, err := config.PuppetFileConflict(app.ConfigPath, cfg.URL, cfg.AccessGate); err != nil {
+				return err
+			} else if why != "" {
+				return errors.New(why)
+			}
+			if err := config.SetMachineKey(app.ConfigPath, key, cfg.URL, cfg.AccessGate, force); errors.Is(err, config.ErrMachineKeyExists) {
+				return fmt.Errorf("%s holds another machine_key; pass --force to replace it", app.ConfigPath)
+			} else if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "saved machine key to %s\n", app.ConfigPath)
+			return err
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "replace another machine_key in the config file")
 	return cmd
 }
 

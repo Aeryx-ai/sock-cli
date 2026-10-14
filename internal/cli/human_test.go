@@ -552,3 +552,83 @@ func TestPuppetsEnsureKeepsEachServersPuppetsApart(t *testing.T) {
 		t.Fatalf("a %q b %q; b's GetMe %d CreatePuppet %d", outA, outB, len(b.CallsTo("GetMe")), len(b.CallsTo("CreatePuppet")))
 	}
 }
+
+// sock-cli-kgh: `machine-key use` keeps a machine key where sock-mcp reads it.
+// It comes on stdin, never argv (visible in ps), and is never printed.
+func TestMachineKeyUseSavesTheKeyFromStdin(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	if err := os.MkdirAll(filepath.Dir(app.ConfigPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(app.ConfigPath, []byte("token = \"sock_st_human_secret\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, err := run(t, app, strings.NewReader(socktest.MachineKeyToken+"\n"), "machine-key", "use")
+	if err != nil || strings.Contains(out+errOut, "sock_mk_") {
+		t.Fatalf("err %v, stdout %q stderr %q", err, out, errOut)
+	}
+	f, err := client.LoadFileConfig(app.ConfigPath)
+	if err != nil || f.MachineKey != socktest.MachineKeyToken || f.Token != "sock_st_human_secret" || f.URL != srv.URL {
+		t.Fatalf("file %+v, %v", f, err)
+	}
+	if fi, _ := os.Stat(app.ConfigPath); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", fi.Mode())
+	}
+	// another key needs --force; the same one is fine
+	if _, _, err := run(t, app, strings.NewReader("sock_mk_other_secret\n"), "machine-key", "use"); err == nil || !strings.Contains(err.Error(), "--force") || strings.Contains(err.Error(), "sock_mk_") {
+		t.Fatalf("overwrite without --force: %v", err)
+	}
+	if _, _, err := run(t, app, strings.NewReader(socktest.MachineKeyToken), "machine-key", "use"); err != nil {
+		t.Fatalf("same key: %v", err)
+	}
+	if _, _, err := run(t, app, strings.NewReader("sock_mk_other_secret\n"), "machine-key", "use", "--force"); err != nil {
+		t.Fatalf("--force: %v", err)
+	}
+	if f, _ := client.LoadFileConfig(app.ConfigPath); f.MachineKey != "sock_mk_other_secret" {
+		t.Fatalf("file %+v", f)
+	}
+}
+
+func TestMachineKeyUseRefusesWhatIsNotAMachineKey(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	for _, in := range []string{"", "sock_pt_dev_secret\n", "sock_mk_a b\n"} {
+		_, _, err := run(t, app, strings.NewReader(in), "machine-key", "use")
+		if err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("%q: %v", in, err)
+		}
+	}
+	if _, err := os.Stat(app.ConfigPath); err == nil {
+		t.Fatal("wrote the file")
+	}
+}
+
+// typed on a terminal the key would echo; it must be piped
+func TestMachineKeyUseRefusesATerminal(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	app.StdinIsTTY = func() bool { return true }
+	_, _, err := run(t, app, strings.NewReader(socktest.MachineKeyToken+"\n"), "machine-key", "use")
+	if err == nil || !strings.Contains(err.Error(), "machine-key create") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestMachineKeyUseRefusesAFileURLThatIsNotThisServer(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	if err := os.MkdirAll(filepath.Dir(app.ConfigPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := "url = \"https://other.example\"\n"
+	if err := os.WriteFile(app.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, app, strings.NewReader(socktest.MachineKeyToken), "machine-key", "use"); err == nil || !strings.Contains(err.Error(), "url") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(app.ConfigPath); string(b) != body {
+		t.Fatalf("file changed: %q", b)
+	}
+}

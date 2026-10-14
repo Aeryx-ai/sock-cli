@@ -72,6 +72,8 @@ An `<account>` is an account id or `@handle`.
     sock puppets token <puppet id> --label <label>
     sock puppets use <puppet id>                 mint a token and keep it as puppet_token, where sock-mcp reads it (prints no secret)
     sock puppets erase <puppet id> [--yes]
+    sock machine-key create --label <label>      # prints the key alone on stdout
+    sock machine-key use [--force]               # key on stdin, kept as machine_key for sock-mcp (prints no secret)
     sock conversations
     sock conversations direct <account>
     sock conversations group [<account>...]

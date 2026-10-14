@@ -143,14 +143,38 @@ func SetNewToken(path, token string) error {
 func SetPuppetToken(path, token, url, gate string) error {
 	return rewrite(path, func(m map[string]any) error {
 		m["puppet_token"] = token
-		if _, ok := m["url"]; !ok && url != "" {
-			m["url"] = url
-		}
-		if _, ok := m["access_gate"]; !ok && gate != "" {
-			m["access_gate"] = gate
-		}
+		fillServer(m, url, gate)
 		return nil
 	})
+}
+
+// ErrMachineKeyExists means the config file already holds another machine key.
+var ErrMachineKeyExists = errors.New("config file already holds another machine_key")
+
+// SetMachineKey writes the machine key sock-mcp reads into the config file
+// under machine_key, keeping every other key and filling url and gate like
+// SetPuppetToken. Another machine key already there is ErrMachineKeyExists
+// unless force; the same one is left as it is.
+func SetMachineKey(path, key, url, gate string, force bool) error {
+	return rewrite(path, func(m map[string]any) error {
+		if s, _ := m["machine_key"].(string); !force && strings.TrimSpace(s) != "" && strings.TrimSpace(s) != key {
+			return ErrMachineKeyExists
+		}
+		m["machine_key"] = key
+		fillServer(m, url, gate)
+		return nil
+	})
+}
+
+// fillServer sets url and access_gate where the file has none: sock-mcp sends
+// a credential from the file to the file's url.
+func fillServer(m map[string]any, url, gate string) {
+	if _, ok := m["url"]; !ok && url != "" {
+		m["url"] = url
+	}
+	if _, ok := m["access_gate"]; !ok && gate != "" {
+		m["access_gate"] = gate
+	}
 }
 
 // PuppetFileConflict says why a puppet token minted against url and gate
