@@ -153,7 +153,7 @@ func TestDefaultPath(t *testing.T) {
 }
 
 func TestTokenWhitespaceTrimmed(t *testing.T) {
-	p := writeFile(t, 0o600, "token = \" sock_pt_file\\n\"\n")
+	p := writeFile(t, 0o600, "url = \"https://x.example\"\ntoken = \" sock_pt_file\\n\"\n")
 	cases := map[string]Sources{
 		"flag": {FlagURL: "https://x.example", FlagToken: " " + tok + "\n", Getenv: env(nil)},
 		"env":  {Getenv: env(map[string]string{"SOCK_URL": "https://x.example", "SOCK_TOKEN": tok + "\r\n"})},
@@ -223,7 +223,7 @@ func TestAnonymousLoadNeedsNoToken(t *testing.T) {
 func TestSetTokenWritesPrivateFileKeepingOtherKeys(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "sock")
 	p := filepath.Join(dir, "config.toml")
-	if err := SetNewToken(p, "sock_st_dev_secret"); err != nil {
+	if err := SetNewToken(p, "sock_st_dev_secret", DefaultURL, ""); err != nil {
 		t.Fatalf("SetNewToken new: %v", err)
 	}
 	assertMode(t, dir, 0o700)
@@ -231,7 +231,7 @@ func TestSetTokenWritesPrivateFileKeepingOtherKeys(t *testing.T) {
 	if err := os.WriteFile(p, []byte("url = \"https://x.example\"\naccess_gate = \"g\"\nextra = 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetNewToken(p, "sock_st_dev_secret"); err != nil {
+	if err := SetNewToken(p, "sock_st_dev_secret", "https://x.example", "g"); err != nil {
 		t.Fatalf("SetNewToken existing: %v", err)
 	}
 	assertMode(t, p, 0o600)
@@ -257,7 +257,7 @@ func TestSetTokenTightensExistingDirectory(t *testing.T) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetNewToken(filepath.Join(dir, "config.toml"), "sock_st_dev_secret"); err != nil {
+	if err := SetNewToken(filepath.Join(dir, "config.toml"), "sock_st_dev_secret", DefaultURL, ""); err != nil {
 		t.Fatal(err)
 	}
 	assertMode(t, dir, 0o700)
@@ -293,14 +293,14 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 
 func TestSetNewTokenRefusesExistingToken(t *testing.T) {
 	p := writeFile(t, 0o600, "url = \"https://x.example\"\ntoken = \"sock_pt_keepme_secret\"\n")
-	if err := SetNewToken(p, "sock_st_dev_secret"); !errors.Is(err, ErrTokenExists) {
+	if err := SetNewToken(p, "sock_st_dev_secret", DefaultURL, ""); !errors.Is(err, ErrTokenExists) {
 		t.Fatalf("got %v, want ErrTokenExists", err)
 	}
 	if tok, err := FileToken(p); err != nil || tok != "sock_pt_keepme_secret" {
 		t.Fatalf("token overwritten: %q, %v", tok, err)
 	}
 	fresh := filepath.Join(t.TempDir(), "sock", "config.toml")
-	if err := SetNewToken(fresh, "sock_st_dev_secret"); err != nil {
+	if err := SetNewToken(fresh, "sock_st_dev_secret", DefaultURL, ""); err != nil {
 		t.Fatalf("new file: %v", err)
 	}
 	if tok, _ := FileToken(fresh); tok != "sock_st_dev_secret" {

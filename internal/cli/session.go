@@ -135,6 +135,11 @@ func (a *App) signIn(cmd *cobra.Command, f signInFlags, rpc signInRPC) error {
 	} else if existing != "" {
 		return a.tokenExists()
 	}
+	if why, err := config.PuppetFileConflict(a.ConfigPath, cfg.URL, cfg.AccessGate); err != nil {
+		return err
+	} else if why != "" {
+		return errors.New(why)
+	}
 	label, err := a.deviceLabel(f.label)
 	if err != nil {
 		return err
@@ -164,7 +169,7 @@ func (a *App) signIn(cmd *cobra.Command, f signInFlags, rpc signInRPC) error {
 	if !strings.HasPrefix(session.GetToken(), humanTokenPrefix) {
 		return errors.New("the server returned no session token")
 	}
-	if err := config.SetNewToken(a.ConfigPath, session.GetToken()); errors.Is(err, config.ErrTokenExists) {
+	if err := config.SetNewToken(a.ConfigPath, session.GetToken(), cfg.URL, cfg.AccessGate); errors.Is(err, config.ErrTokenExists) {
 		// A token arrived in the file during the browser wait: keep it.
 		return fmt.Errorf("%w; the new session (device %s) was not saved, revoke it with sock devices revoke", a.tokenExists(), session.GetDevice().GetId())
 	} else if err != nil {
@@ -248,12 +253,12 @@ func newLogoutCmd(app *App) *cobra.Command {
 			case strings.HasPrefix(token, puppetTokenPrefix):
 				return errors.New("the config file holds a puppet token; puppets do not sign out, their owner revokes them with sock devices revoke")
 			}
-			cfg, err := app.load(true)
+			// the file's session at the file's server, whatever SOCK_TOKEN holds
+			cfg, err := config.Load(config.Sources{FlagURL: app.flagURL, Getenv: app.Getenv, Path: app.ConfigPath, FileTokenOnly: true})
 			if err != nil {
 				return err
 			}
-			cfg.Token = token
-			app.token = token
+			app.token = cfg.Token
 			c := newClients(cfg, app.userAgent())
 			_, err = call(cmd.Context(), app, func(ctx context.Context) (*sockv1.SignOutResponse, error) {
 				res, err := c.Identity.SignOut(ctx, connect.NewRequest(&sockv1.SignOutRequest{}))

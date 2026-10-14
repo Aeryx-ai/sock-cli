@@ -391,7 +391,7 @@ func TestLogoutAlreadyRevokedRemovesToken(t *testing.T) {
 	srv := socktest.New(t)
 	srv.Fail = map[string]error{"SignOut": socktest.Error(connect.CodeUnauthenticated, sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID)}
 	app := humanApp(t, srv, nil)
-	writeConfig(t, app, fmt.Sprintf("token = %q\n", socktest.HumanToken))
+	writeConfig(t, app, fmt.Sprintf("url = %q\ntoken = %q\n", srv.URL, socktest.HumanToken))
 	if out, _, err := run(t, app, nil, "logout"); err != nil || out != "signed out\n" {
 		t.Fatalf("logout: %q, %v", out, err)
 	}

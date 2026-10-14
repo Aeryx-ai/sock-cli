@@ -398,7 +398,7 @@ func TestAccountEraseRemovesFileToken(t *testing.T) {
 	srv := socktest.New(t)
 	srv.Me = socktest.Human()
 	app := humanApp(t, srv, nil)
-	writeConfig(t, app, fmt.Sprintf("token = %q\n", socktest.HumanToken))
+	writeConfig(t, app, fmt.Sprintf("url = %q\ntoken = %q\n", srv.URL, socktest.HumanToken))
 	if out, _ := mustRun(t, app, "account", "erase", "--confirm", "@guy"); out != "erased\n" {
 		t.Fatalf("got %q", out)
 	}

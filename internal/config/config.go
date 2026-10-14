@@ -35,8 +35,12 @@ type Sources struct {
 	// Path is the config file. A missing file is not an error.
 	Path string
 	// Anonymous skips the token requirement, for sock login and sock
-	// register, which run before a token exists.
+	// register, which run before a token exists. A token from the file is
+	// left out when another source names the server.
 	Anonymous bool
+	// FileTokenOnly ignores SOCK_TOKEN and --token, for sock logout, which
+	// signs out the file's session.
+	FileTokenOnly bool
 }
 
 // DefaultPath is $XDG_CONFIG_HOME/sock/config.toml, else ~/.config/sock/config.toml.
@@ -44,7 +48,10 @@ func DefaultPath(getenv func(string) string) (string, error) {
 	return client.DefaultConfigPath(getenv)
 }
 
-// Load resolves and validates the config.
+// Load resolves and validates the config. A token from the file goes only to
+// the file's server: the URL and gate then come from the file too, and a
+// SOCK_URL, --url or SOCK_ACCESS_GATE naming another is refused. One source,
+// never a mix, so a repo's .envrc cannot redirect the session.
 func Load(s Sources) (Config, error) {
 	c := Config{Config: client.Config{URL: DefaultURL}}
 	f, err := client.LoadFileConfig(s.Path)
@@ -74,10 +81,41 @@ func Load(s Sources) (Config, error) {
 	// A trailing newline from a secret file or `$(cat ...)` is not part of the value.
 	c.Token = strings.TrimSpace(c.Token)
 	c.AccessGate = strings.TrimSpace(c.AccessGate)
+	if s.FileTokenOnly || (s.FlagToken == "" && s.Getenv("SOCK_TOKEN") == "") {
+		c.Token = strings.TrimSpace(f.Token)
+		if c.Token != "" {
+			fileURL, fileGate := f.URL, strings.TrimSpace(f.AccessGate)
+			if fileURL == "" {
+				fileURL = DefaultURL
+			}
+			if why := mixedSources(s, fileURL, fileGate); why != "" {
+				if !s.Anonymous {
+					return Config{}, fmt.Errorf("%s holds the token, so the server comes from it too, but %s; unset it, or set url and access_gate in the file", s.Path, why)
+				}
+				c.Token = "" // the caller names another server: never pair them
+			} else {
+				c.URL, c.AccessGate = fileURL, fileGate
+			}
+		}
+	}
 	if err := validate(c, s.Anonymous); err != nil {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// mixedSources names the flag or variable that points a file token at a
+// server other than fileURL and fileGate, or "" when none does.
+func mixedSources(s Sources, fileURL, fileGate string) string {
+	switch {
+	case s.FlagURL != "" && s.FlagURL != fileURL:
+		return "--url names another server"
+	case s.Getenv("SOCK_URL") != "" && s.Getenv("SOCK_URL") != fileURL:
+		return "SOCK_URL names another server"
+	case s.Getenv("SOCK_ACCESS_GATE") != "" && strings.TrimSpace(s.Getenv("SOCK_ACCESS_GATE")) != fileGate:
+		return "SOCK_ACCESS_GATE names another gate"
+	}
+	return ""
 }
 
 // anonymousToken stands in for the token when an anonymous load validates
@@ -122,12 +160,25 @@ var ErrTokenExists = errors.New("config file already holds a token")
 // an earlier check is never lost. The directory is made 0700 and the file
 // 0600, written to a temporary file and renamed so a crash never leaves a
 // half-written file.
-func SetNewToken(path, token string) error {
+//
+// Load sends a file token only to the file's server, so url and gate, the
+// server the token was minted at, are written beside it where the file has
+// none (url only when it is not DefaultURL); a file naming another is refused.
+func SetNewToken(path, token, url, gate string) error {
 	return rewrite(path, func(m map[string]any) error {
 		if s, _ := m["token"].(string); strings.TrimSpace(s) != "" {
 			return ErrTokenExists
 		}
+		fileURL, _ := m["url"].(string)
+		fileGate, _ := m["access_gate"].(string)
+		if why := serverConflict(fileURL, fileGate, url, gate); why != "" {
+			return errors.New(why)
+		}
 		m["token"] = token
+		if url == DefaultURL {
+			url = ""
+		}
+		fillServer(m, url, gate)
 		return nil
 	})
 }
