@@ -80,7 +80,7 @@ An `<account>` is an account id or `@handle`.
     sock conversations add <conversation id> <account>
     sock conversations remove <conversation id> <account>
     sock conversations leave <conversation id>
-    sock send [--conversation <id>] [text...]
+    sock send [--conversation <id>] [--as-puppet [--project <dir>]] [text...]
     sock listen [--exec <cmd>]
     sock fetch [--no-ack]
     sock ack <message id>...
@@ -90,6 +90,8 @@ An `<account>` is an account id or `@handle`.
     sock report <account> --reason <reason> [--note <text>] [--evidence <file>]
     sock export                                  # always one JSON object
     sock account erase [--confirm <handle>]
+
+`send --as-puppet` speaks as the puppet sock-mcp would, through the same sock-client decision: `SOCK_TOKEN`, else the config file's `machine_key` (the puppet of the project in `--project`, default the working directory; `CLAUDE_PROJECT_DIR` wins when set), else its `puppet_token`. It never uses your login. A hook passes the directory its sock-mcp starts in, so a Codex plugin hook passes `PLUGIN_ROOT` and both land on `puppet_token`.
 
 `puppets create` and `puppets token` print the token alone on stdout so it pipes; everything else they say goes to stderr. `report --evidence` takes up to 20 messages, one per line, exactly as `sock fetch --json` printed them. `puppets erase` and `account erase` ask on a terminal; off one they need `--yes` or `--confirm <handle>`.
 

@@ -19,17 +19,28 @@ import (
 const maxTextBytes = 65536
 
 func newSendCmd(app *App) *cobra.Command {
-	var conversation string
+	var (
+		conversation, project string
+		asPuppet              bool
+	)
 	cmd := &cobra.Command{
 		Use:   "send [text...]",
 		Short: "Send a message to your owner, or to --conversation",
 		Long:  "Send a message. Text comes from the arguments, or stdin when there are none. Without --conversation it goes to your owner (puppet tokens only; a human must pass --conversation).",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if project != "" && !asPuppet {
+				return errors.New("--project needs --as-puppet")
+			}
 			text, err := readText(args, cmd.InOrStdin(), app.StdinIsTTY())
 			if err != nil {
 				return err
 			}
-			c, err := app.clients()
+			var c Clients
+			if asPuppet {
+				c, err = app.puppetClients(cmd.Context(), project, cmd.ErrOrStderr())
+			} else {
+				c, err = app.clients()
+			}
 			if err != nil {
 				return err
 			}
@@ -58,6 +69,8 @@ func newSendCmd(app *App) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&conversation, "conversation", "", "conversation id (default: your owner)")
+	cmd.Flags().BoolVar(&asPuppet, "as-puppet", false, "send as the puppet sock-mcp would: SOCK_TOKEN, else the config file's machine_key (the project's puppet), else its puppet_token; never your login")
+	cmd.Flags().StringVar(&project, "project", "", "with --as-puppet, the directory sock-mcp starts in (default: the working directory; CLAUDE_PROJECT_DIR wins when set)")
 	return cmd
 }
 
