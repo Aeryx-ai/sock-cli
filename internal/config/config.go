@@ -135,11 +135,39 @@ func SetNewToken(path, token string) error {
 // SetPuppetToken writes the puppet token sock-mcp reads into the config file
 // under puppet_token, replacing any earlier one and keeping every other key,
 // the human's token included. Written like SetNewToken.
-func SetPuppetToken(path, token string) error {
+//
+// sock-mcp reads the URL and access gate from the same file, so a key the file
+// lacks is filled with the url and gate the token was minted against. A key it
+// has is left alone: PuppetFileConflict refuses before a token is minted for a
+// different one.
+func SetPuppetToken(path, token, url, gate string) error {
 	return rewrite(path, func(m map[string]any) error {
 		m["puppet_token"] = token
+		if _, ok := m["url"]; !ok && url != "" {
+			m["url"] = url
+		}
+		if _, ok := m["access_gate"]; !ok && gate != "" {
+			m["access_gate"] = gate
+		}
 		return nil
 	})
+}
+
+// PuppetFileConflict says why a puppet token minted against url and gate
+// cannot be saved in the file at path: the file already names another url or
+// gate, and sock-mcp would send the token there. "" means it can be saved.
+func PuppetFileConflict(path, url, gate string) (string, error) {
+	f, err := client.LoadFileConfig(path)
+	if err != nil {
+		return "", err
+	}
+	if f.URL != "" && f.URL != url {
+		return "the config file's url differs from the server this command is using; unset SOCK_URL and --url, or change url in the file", nil
+	}
+	if f.AccessGate != "" && f.AccessGate != gate {
+		return "the config file's access_gate differs from the one this command is using; unset SOCK_ACCESS_GATE or change access_gate in the file", nil
+	}
+	return "", nil
 }
 
 // RemoveToken deletes the token from the config file, keeping every other

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -174,6 +175,17 @@ func newPuppetUseCmd(app *App) *cobra.Command {
 			"The token is not printed.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := app.load(false)
+			if err != nil {
+				return err
+			}
+			// sock-mcp sends the token to the url in the file, so refuse before minting
+			// when that is not the server this command is talking to.
+			if why, err := config.PuppetFileConflict(app.ConfigPath, cfg.URL, cfg.AccessGate); err != nil {
+				return err
+			} else if why != "" {
+				return errors.New(why)
+			}
 			c, err := app.clients()
 			if err != nil {
 				return err
@@ -182,7 +194,7 @@ func newPuppetUseCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := config.SetPuppetToken(app.ConfigPath, res.GetToken()); err != nil {
+			if err := config.SetPuppetToken(app.ConfigPath, res.GetToken(), cfg.URL, cfg.AccessGate); err != nil {
 				return fmt.Errorf("minted a token (device %s) but could not save it: %w; revoke it with sock devices revoke", res.GetDevice().GetId(), err)
 			}
 			_, err = fmt.Fprintf(cmd.ErrOrStderr(), "saved puppet token (device %s) to %s\n", res.GetDevice().GetId(), app.ConfigPath)

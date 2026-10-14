@@ -408,7 +408,7 @@ func TestPuppetsUseWritesThePuppetTokenToTheConfigFile(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(app.ConfigPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(app.ConfigPath, []byte("url = \"https://x.example\"\ntoken = \"sock_st_human_secret\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(app.ConfigPath, []byte("token = \"sock_st_human_secret\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out, errOut := mustRun(t, app, "puppets", "use", "p-1")
@@ -419,7 +419,7 @@ func TestPuppetsUseWritesThePuppetTokenToTheConfigFile(t *testing.T) {
 		t.Fatalf("mint request %v", req)
 	}
 	f, err := client.LoadFileConfig(app.ConfigPath)
-	if err != nil || f.PuppetToken != "sock_pt_device-minted_secret" || f.Token != "sock_st_human_secret" || f.URL != "https://x.example" {
+	if err != nil || f.PuppetToken != "sock_pt_device-minted_secret" || f.Token != "sock_st_human_secret" || f.URL != app.Getenv("SOCK_URL") {
 		t.Fatalf("file %+v, %v", f, err)
 	}
 	fi, err := os.Stat(app.ConfigPath)
@@ -430,5 +430,40 @@ func TestPuppetsUseWritesThePuppetTokenToTheConfigFile(t *testing.T) {
 	mustRun(t, app, "puppets", "use", "p-1")
 	if f, _ := client.LoadFileConfig(app.ConfigPath); f.PuppetToken == "" {
 		t.Fatal("second use lost the token")
+	}
+}
+
+// The token is saved with the URL (and gate) it was minted against: sock-mcp
+// reads them from the file, so a staging token never goes to the default hub.
+func TestPuppetsUseRefusesAFileURLThatIsNotTheMintingURL(t *testing.T) {
+	app, srv := signedIn(t)
+	app.ConfigPath = filepath.Join(t.TempDir(), "sock", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(app.ConfigPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := "url = \"https://other.example\"\ntoken = \"sock_st_human_secret\"\n"
+	if err := os.WriteFile(app.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := run(t, app, nil, "puppets", "use", "p-1")
+	if err == nil || !strings.Contains(err.Error(), "other.example") && !strings.Contains(err.Error(), "url") {
+		t.Fatalf("err = %v", err)
+	}
+	if n := len(srv.CallsTo("MintPuppetToken")); n != 0 {
+		t.Fatalf("minted %d tokens before refusing", n)
+	}
+	if b, _ := os.ReadFile(app.ConfigPath); string(b) != body {
+		t.Fatalf("file changed: %q", b)
+	}
+}
+
+func TestPuppetsUseSavesTheMintingGate(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Me = socktest.Human()
+	app := humanApp(t, srv, map[string]string{"SOCK_TOKEN": socktest.HumanToken, "SOCK_ACCESS_GATE": "gate-1"})
+	mustRun(t, app, "puppets", "use", "p-1")
+	f, err := client.LoadFileConfig(app.ConfigPath)
+	if err != nil || f.AccessGate != "gate-1" || f.URL != srv.URL {
+		t.Fatalf("file %+v, %v", f, err)
 	}
 }
