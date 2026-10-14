@@ -155,7 +155,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if a := r.Header.Get("Authorization"); a != "Bearer "+Token && a != "Bearer "+HumanToken && a != "Bearer "+MachineKeyToken {
+		if a := r.Header.Get("Authorization"); a != "Bearer "+Token && a != "Bearer "+HumanToken && a != "Bearer "+MachineKeyToken && a != "Bearer sock_pt_device-new_secret" {
 			err := withReason(connect.NewError(connect.CodeUnauthenticated, errors.New("token rejected")), sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID)
 			_ = connect.NewErrorWriter().Write(w, r, err)
 			return

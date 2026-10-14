@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -70,7 +72,11 @@ func newPuppetEnsureCmd(app *App) *cobra.Command {
 				Host: client.ShortHost(),
 				Log:  func(f string, a ...any) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), f+"\n", a...) },
 			}
-			p.Sweep(cmd.Context())
+			// a cached token the hub rejects (the puppet was erased) is replaced
+			p.Check = client.NewTokenCheck(cfg.Config, app.userAgent())
+			sweep, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
+			p.Sweep(sweep)
+			cancel()
 			if _, err := p.Ensure(cmd.Context(), args[0]); err != nil {
 				return err
 			}
