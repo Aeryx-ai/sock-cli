@@ -1092,3 +1092,53 @@ func TestListenSkipsReadMarkersAndUnknownEvents(t *testing.T) {
 		})
 	}
 }
+
+// A caller that must not post twice across reruns of itself (sock-bridge)
+// names its own key; every retry and every rerun then dedupes at the hub.
+func TestSendUsesTheCallersIdempotencyKey(t *testing.T) {
+	srv := socktest.New(t)
+	srv.SendErrs = []error{socktest.Unavailable()}
+	app := testApp(t, srv)
+	recordSleeps(&app.Retrier.Sleep)
+	if _, _, err := run(t, app, nil, "send", "--idempotency-key", "m1.part-2", "hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	sent, _, _, _ := srv.Snapshot()
+	if len(sent) != 2 {
+		t.Fatalf("attempts %d, want 2", len(sent))
+	}
+	for _, s := range sent {
+		if s.IdempotencyKey != "m1.part-2" {
+			t.Fatalf("key %q, want m1.part-2", s.IdempotencyKey)
+		}
+	}
+}
+
+func TestSendRefusesAMalformedIdempotencyKeyBeforeAnyRequest(t *testing.T) {
+	for name, key := range map[string]string{
+		"too long":       strings.Repeat("a", 129),
+		"space":          "a b",
+		"newline":        "a\nb",
+		"slash":          "a/b",
+		"leading dash":   "-a",
+		"leading dot":    ".a",
+		"non-ascii":      "é",
+		"control":        "a\x1bb",
+		"flag injection": "--url=x",
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := socktest.New(t)
+			_, _, err := run(t, testApp(t, srv), nil, "send", "--idempotency-key", key, "hi")
+			if err == nil || !strings.Contains(err.Error(), "--idempotency-key") {
+				t.Fatalf("err = %v", err)
+			}
+			if sent, _, _, _ := srv.Snapshot(); len(sent) != 0 {
+				t.Fatalf("%d requests reached the server", len(sent))
+			}
+		})
+	}
+	srv := socktest.New(t)
+	if _, _, err := run(t, testApp(t, srv), nil, "send", "--idempotency-key", strings.Repeat("a", 128), "hi"); err != nil {
+		t.Fatalf("a 128 character key is valid: %v", err)
+	}
+}

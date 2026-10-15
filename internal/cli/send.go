@@ -21,8 +21,8 @@ const maxTextBytes = 65536
 
 func newSendCmd(app *App) *cobra.Command {
 	var (
-		conversation, project string
-		asPuppet              bool
+		conversation, project, idemKey string
+		asPuppet                       bool
 	)
 	cmd := &cobra.Command{
 		Use:   "send [text...]",
@@ -31,6 +31,9 @@ func newSendCmd(app *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if project != "" && !asPuppet {
 				return errors.New("--project needs --as-puppet")
+			}
+			if cmd.Flags().Changed("idempotency-key") && !validIdempotencyKey(idemKey) {
+				return errors.New("--idempotency-key must be 1 to 128 characters of A-Z a-z 0-9 . _ : -, starting with a letter or digit")
 			}
 			text, err := readText(args, cmd.InOrStdin(), app.StdinIsTTY())
 			if err != nil {
@@ -51,7 +54,10 @@ func newSendCmd(app *App) *cobra.Command {
 			if conversation == "" && app.human() {
 				return errors.New("a human must pass --conversation; without it send goes to a puppet's owner")
 			}
-			key := rand.Text() // one key per invocation, reused by every retry
+			key := idemKey // the caller's, stable across reruns
+			if key == "" {
+				key = rand.Text() // one key per invocation, reused by every retry
+			}
 			send := func(ctx context.Context) (*sockv1.Message, error) {
 				if conversation == "" {
 					res, err := c.Messaging.NotifyOwner(ctx, connect.NewRequest(&sockv1.NotifyOwnerRequest{Text: text, IdempotencyKey: key}))
@@ -83,6 +89,7 @@ func newSendCmd(app *App) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&conversation, "conversation", "", "conversation id (default: your owner)")
 	cmd.Flags().BoolVar(&asPuppet, "as-puppet", false, "send as the puppet sock-mcp would: SOCK_TOKEN, else the config file's machine_key (the project's puppet), else its puppet_token; never your login")
+	cmd.Flags().StringVar(&idemKey, "idempotency-key", "", "key the hub dedupes this send by (1 to 128 of A-Z a-z 0-9 . _ : -); a rerun with the same key posts at most once (default: a fresh key per invocation)")
 	cmd.Flags().StringVar(&project, "project", "", "with --as-puppet, the directory sock-mcp starts in (default: the working directory; CLAUDE_PROJECT_DIR wins when set)")
 	return cmd
 }
@@ -113,4 +120,21 @@ func readText(args []string, stdin io.Reader, isTTY bool) (string, error) {
 		return "", errors.New("message is not valid UTF-8")
 	}
 	return text, nil
+}
+
+// validIdempotencyKey is 1 to 128 shell-safe characters, starting with a
+// letter or digit: the hub's key limit, narrowed to one word that can be
+// pasted back into a command line as printed.
+func validIdempotencyKey(k string) bool {
+	if k == "" || len(k) > 128 {
+		return false
+	}
+	for i := range len(k) {
+		c := k[i]
+		alnum := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+		if !alnum && (i == 0 || c != '.' && c != '_' && c != ':' && c != '-') {
+			return false
+		}
+	}
+	return true
 }
