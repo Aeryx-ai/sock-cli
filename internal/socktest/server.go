@@ -107,6 +107,8 @@ type Server struct {
 	// MachineKeyPuppets, when set, is ListPuppets' answer to MachineKeyToken:
 	// the puppets that key created (ADR 10).
 	MachineKeyPuppets []*sockv1.PuppetWithDevices
+	// MintMachineKeyErr, when set, is MintMachineKey's answer.
+	MintMachineKeyErr error
 	Blocked           []*sockv1.BlockedAccount
 
 	sockv1connect.UnimplementedIdentityServiceHandler

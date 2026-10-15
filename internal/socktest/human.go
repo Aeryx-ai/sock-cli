@@ -125,6 +125,9 @@ func (s *Server) CreatePuppet(_ context.Context, req *connect.Request[sockv1.Cre
 
 // MintMachineKey implements the generated handler.
 func (s *Server) MintMachineKey(_ context.Context, req *connect.Request[sockv1.MintMachineKeyRequest]) (*connect.Response[sockv1.MintMachineKeyResponse], error) {
+	if s.MintMachineKeyErr != nil {
+		return nil, s.MintMachineKeyErr
+	}
 	return ok(&sockv1.MintMachineKeyResponse{
 		Device: Device("device-mk", "human-1", req.Msg.GetLabel()),
 		Token:  "sock_mk_device-mk_secret",

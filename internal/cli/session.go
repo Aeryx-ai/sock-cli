@@ -175,12 +175,42 @@ func (a *App) signIn(cmd *cobra.Command, f signInFlags, rpc signInRPC) error {
 	} else if err != nil {
 		return fmt.Errorf("signed in, but saving the token failed (%w); revoke device %s with sock devices revoke from another session", err, session.GetDevice().GetId())
 	}
+	a.keepMachineKey(cmd, cfg, session)
 	session.Token = ""
 	if a.jsonOut {
 		return a.printer().json(cmd.OutOrStdout(), session)
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "signed in as @%s on device %s\n", line(session.GetAccount().GetHuman().GetHandle()), line(session.GetDevice().GetId()))
 	return err
+}
+
+// keepMachineKey mints a machine key for this host with the login just made
+// and keeps it as machine_key, unless the file already has one: sign in once
+// and sock-mcp makes each project its own puppet. The login stands either
+// way: a key that cannot be minted or saved only says how to finish.
+func (a *App) keepMachineKey(cmd *cobra.Command, cfg config.Config, session *sockv1.Session) {
+	stderr := cmd.ErrOrStderr()
+	finish := "sign-in is saved; to let sock-mcp make a puppet per project, run: sock machine-key create | sock machine-key use"
+	if fc, err := client.LoadFileConfig(a.ConfigPath); err == nil && strings.TrimSpace(fc.MachineKey) != "" {
+		return
+	}
+	cfg.Token = session.GetToken()
+	short, _, _ := strings.Cut(a.host(), ".")
+	label, err := labelOr("", short)
+	if err != nil {
+		warnf(stderr, "no machine key kept: %v; %s", err, finish)
+		return
+	}
+	res, err := unary(cmd.Context(), a, newClients(cfg, a.userAgent()).Identity.MintMachineKey, &sockv1.MintMachineKeyRequest{Label: label})
+	if err != nil {
+		warnf(stderr, "no machine key kept (%v); %s", client.Describe(err), finish)
+		return
+	}
+	if err := config.SetMachineKey(a.ConfigPath, res.GetToken(), cfg.URL, cfg.AccessGate, false); err != nil {
+		warnf(stderr, "no machine key kept (%v); %s", err, finish)
+		return
+	}
+	warnf(stderr, "kept a machine key for %s: each project you open gets its own puppet", label)
 }
 
 // tokenExists is the refusal to overwrite the config file's token: a puppet

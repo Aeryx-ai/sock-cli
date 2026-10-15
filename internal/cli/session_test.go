@@ -462,3 +462,74 @@ func TestLoginSaysWhenTheCallbackArrives(t *testing.T) {
 		t.Fatalf("stderr %q does not say the callback arrived", errOut)
 	}
 }
+
+// Sign in once and puppets register themselves: login also mints a machine
+// key for this host and keeps it, so sock-mcp makes each project its own
+// puppet with no further step.
+func TestLoginAlsoKeepsAMachineKey(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil {
+		t.Fatalf("login: %v, stderr %q", err, errOut)
+	}
+	if out != "signed in as @guy on device "+socktest.HumanDeviceID+"\n" {
+		t.Fatalf("stdout %q", out)
+	}
+	if strings.Contains(out+errOut, "sock_mk_") || strings.Contains(out+errOut, socktest.HumanToken) {
+		t.Fatalf("a secret was printed: %q %q", out, errOut)
+	}
+	fc, err := client.LoadFileConfig(app.ConfigPath)
+	if err != nil || fc.MachineKey != "sock_mk_device-mk_secret" || fc.Token != socktest.HumanToken {
+		t.Fatalf("config %+v, %v", fc, err)
+	}
+	calls := srv.CallsTo("MintMachineKey")
+	if len(calls) != 1 {
+		t.Fatalf("%d MintMachineKey calls", len(calls))
+	}
+	if got := calls[0].Header.Get("Authorization"); got != "Bearer "+socktest.HumanToken {
+		t.Fatalf("minted with %q, want the new login", got)
+	}
+	if label := calls[0].Msg.(*sockv1.MintMachineKeyRequest).GetLabel(); label != "box" {
+		t.Fatalf("label %q, want the short hostname", label)
+	}
+	if !strings.Contains(errOut, "machine key") {
+		t.Fatalf("stderr %q does not say a machine key was kept", errOut)
+	}
+}
+
+// A machine key the file already holds is never replaced by a login.
+func TestLoginKeepsAnExistingMachineKey(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	writeConfig(t, app, "machine_key = \"sock_mk_existing_secret\"\n")
+	if _, errOut, err := run(t, app, nil, "login"); err != nil {
+		t.Fatalf("login: %v, stderr %q", err, errOut)
+	}
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.MachineKey != "sock_mk_existing_secret" {
+		t.Fatalf("machine_key replaced: %+v", fc)
+	}
+	if n := len(srv.CallsTo("MintMachineKey")); n != 0 {
+		t.Fatalf("%d machine keys minted though the file had one", n)
+	}
+}
+
+// Signing in worked; a key that could not be minted must not undo it.
+func TestLoginSurvivesAMachineKeyFailure(t *testing.T) {
+	srv := socktest.New(t)
+	srv.MintMachineKeyErr = connect.NewError(connect.CodeUnavailable, errors.New("down"))
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil {
+		t.Fatalf("login failed because the key could not be minted: %v", err)
+	}
+	if !strings.Contains(out, "signed in as @guy") || fileToken(t, app) != socktest.HumanToken {
+		t.Fatalf("login not completed: %q", out)
+	}
+	if !strings.Contains(errOut, "sock machine-key create") {
+		t.Fatalf("stderr %q does not say how to finish", errOut)
+	}
+}
