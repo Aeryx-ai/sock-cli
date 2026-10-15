@@ -81,7 +81,7 @@ An `<account>` is an account id or `@handle`.
     sock conversations add <conversation id> <account>
     sock conversations remove <conversation id> <account>
     sock conversations leave <conversation id>
-    sock send [--conversation <id>] [--as-puppet [--project <dir>]] [text...]
+    sock send [--conversation <id>] [--idempotency-key <k>] [--as-puppet [--project <dir>]] [text...]
     sock listen [--exec <cmd>]
     sock fetch [--no-ack]
     sock ack <message id>...
@@ -91,6 +91,8 @@ An `<account>` is an account id or `@handle`.
     sock report <account> --reason <reason> [--note <text>] [--evidence <file>]
     sock export                                  # always one JSON object
     sock account erase [--confirm <handle>]
+
+`send` retries within one invocation under a single key, so a retry never posts twice. A caller that reruns itself (a runner, a bridge) names the key with `--idempotency-key <k>` (1 to 128 of `A-Z a-z 0-9 . _ : -`, starting with a letter or digit), and a rerun with the same key posts at most once. The hub limits a device's sends (about one a second sustained): a burst faster than that is delayed by the hub's `Retry-After`, about a second, which `send` waits out. That is the sender's delay, not the delivery's: a stored message reaches a listening runner in tens of milliseconds.
 
 `send --as-puppet` speaks as the puppet sock-mcp would, through the same sock-client decision: `SOCK_TOKEN`, else the config file's `machine_key` (the puppet of the project in `--project`, default the working directory; `CLAUDE_PROJECT_DIR` wins when set), else its `puppet_token`. It never uses your login. A cached project puppet token is used without asking the hub first; when the hub rejects it (the puppet was erased) the token is checked, replaced and the message sent once more. Puppets of removed repositories are swept at most every 6 hours. A hook passes the directory its sock-mcp starts in, so a Codex plugin hook passes `PLUGIN_ROOT` and both land on `puppet_token`.
 
