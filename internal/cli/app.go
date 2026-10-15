@@ -60,6 +60,8 @@ type App struct {
 	// token is the one the last clients() call resolved; it decides whether
 	// errors are worded for a human or a puppet.
 	token string
+	// url is the server that same call resolved.
+	url string
 }
 
 // DefaultApp wires the real environment.
@@ -121,7 +123,7 @@ func (a *App) clients() (Clients, error) {
 	if err != nil {
 		return Clients{}, err
 	}
-	a.token = cfg.Token
+	a.token, a.url = cfg.Token, cfg.URL
 	return newClients(cfg, a.userAgent()), nil
 }
 

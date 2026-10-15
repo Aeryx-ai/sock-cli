@@ -23,7 +23,7 @@ const (
 // the hub first (sock-cli-7ut); for a machine key, recheck resolves again with
 // that check, replacing the token of an erased puppet, and is for a call the
 // hub answered TOKEN_INVALID. It is nil for any other credential.
-func (a *App) puppetClients(ctx context.Context, project string, stderr io.Writer) (c Clients, recheck func(context.Context) (Clients, error), err error) {
+func (a *App) puppetClients(ctx context.Context, project string, trustCache bool, stderr io.Writer) (c Clients, recheck func(context.Context) (Clients, error), err error) {
 	if a.flagToken != "" || a.flagURL != "" {
 		return Clients{}, nil, errors.New("--as-puppet takes the server and credential as sock-mcp does, from SOCK_TOKEN or the config file; drop --token and --url")
 	}
@@ -34,7 +34,7 @@ func (a *App) puppetClients(ctx context.Context, project string, stderr io.Write
 		NoProjectHint: "set CLAUDE_PROJECT_DIR or pass --project the project's repository",
 		UserAgent:     a.userAgent(),
 		Log:           func(f string, args ...any) { warnf(stderr, f, args...) },
-		TrustCache:    true,
+		TrustCache:    trustCache,
 	}
 	cfg, err := client.LoadPuppetConfig(o)
 	if errors.Is(err, client.ErrNoPuppetCredential) {
@@ -62,6 +62,6 @@ func (a *App) projectPuppetClients(ctx context.Context, cfg client.Config, o cli
 	if client.TokenKind(cfg.Token) != client.KindPuppet {
 		return Clients{}, errors.New(errSessionAsPuppet)
 	}
-	a.token = cfg.Token
+	a.token, a.url = cfg.Token, cfg.URL
 	return client.New(cfg, a.userAgent()), nil
 }

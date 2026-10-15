@@ -36,7 +36,10 @@ const (
 var errStreamIdle = errors.New("no message or heartbeat")
 
 func newListenCmd(app *App) *cobra.Command {
-	var execCmd string
+	var (
+		execCmd, project string
+		asPuppet         bool
+	)
 	cmd := &cobra.Command{
 		Use:   "listen",
 		Short: "Stream messages as they arrive and acknowledge each one",
@@ -44,7 +47,20 @@ func newListenCmd(app *App) *cobra.Command {
 			"With --exec, a message is acknowledged only if the command exits 0; a failing command is retried up to 5 times with backoff, then the message stays pending for the next connection. Delivery is at-least-once, so the command may see a message twice.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			c, err := app.clients()
+			if project != "" && !asPuppet {
+				return errors.New("--project needs --as-puppet")
+			}
+			var (
+				c   Clients
+				err error
+			)
+			if asPuppet {
+				// checked at start, not trusted: a service manager restarts
+				// listen, and a cached token of an erased puppet must be replaced
+				c, _, err = app.puppetClients(cmd.Context(), project, false, cmd.ErrOrStderr())
+			} else {
+				c, err = app.clients()
+			}
 			if err != nil {
 				return err
 			}
@@ -53,9 +69,17 @@ func newListenCmd(app *App) *cobra.Command {
 				idle = defaultListenIdle
 			}
 			l := &listener{app: app, clients: c, printer: app.printer(), exec: execCmd, idle: idle, out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr()}
+			// A puppet listener hands its own credential to the child: the
+			// runner's owner gate and a Codex agent's sock-mcp need it. A human
+			// session token never goes: a prompt-injected child could print it.
+			if client.TokenKind(app.token) == client.KindPuppet {
+				l.childEnv = []string{"SOCK_TOKEN=" + app.token, "SOCK_URL=" + app.url}
+			}
 			return l.Run(cmd.Context())
 		},
 	}
+	cmd.Flags().BoolVar(&asPuppet, "as-puppet", false, "listen as the puppet sock-mcp would: SOCK_TOKEN, else the config file's machine_key (the project's puppet), else its puppet_token; never your login. The --exec child gets that puppet's SOCK_TOKEN and SOCK_URL")
+	cmd.Flags().StringVar(&project, "project", "", "with --as-puppet, the directory sock-mcp starts in (default: the working directory; CLAUDE_PROJECT_DIR wins when set)")
 	cmd.Flags().StringVar(&execCmd, "exec", "", "shell command run per message, message JSON on stdin; ack on exit 0")
 	return cmd
 }
@@ -68,6 +92,8 @@ type listener struct {
 	idle    time.Duration
 	out     io.Writer
 	errOut  io.Writer
+	// childEnv is the listener's own puppet credential, for the --exec child.
+	childEnv []string
 }
 
 // logf writes a diagnostic line. A failing stderr has no recovery path.
@@ -173,6 +199,7 @@ func (l *listener) handle(ctx context.Context, m *sockv1.Message) error {
 			"SOCK_CONVERSATION_ID=" + m.GetConversationId(),
 			"SOCK_SENDER_ID=" + m.GetSenderId(),
 		}
+		env = append(env, l.childEnv...)
 		if err := l.runExec(ctx, m.GetId(), payload, env); err != nil {
 			return fmt.Errorf("--exec failed: %w (not acked)", err)
 		}

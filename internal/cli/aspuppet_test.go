@@ -1,13 +1,18 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+
+	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 
 	"github.com/guygrigsby/sock-cli/internal/socktest"
 )
@@ -242,5 +247,87 @@ func TestSendAsPuppetRejectedPuppetTokenIsNotRetried(t *testing.T) {
 	// the fake refuses it before recording a call: count requests
 	if _, _, agents, _ := srv.Snapshot(); len(agents) != 1 {
 		t.Fatalf("%d requests, want one", len(agents))
+	}
+}
+
+// The runner's owner gate runs `sock whoami` in the --exec child, and a Codex
+// agent's sock-mcp needs the token too: a PUPPET listener hands its own
+// credential to the child. A human session token never reaches it: a
+// prompt-injected child could print it.
+func execEnv(t *testing.T, app *App, srv *socktest.Server, args ...string) []string {
+	t.Helper()
+	srv.Streams = []socktest.StreamScript{{Events: []*sockv1.SubscribeResponse{socktest.Event(socktest.Text("m-1", "c-1", 1, "hi"))}, Hold: true}}
+	var mu sync.Mutex
+	var env []string
+	app.RunExec = func(_ context.Context, _ string, _ []byte, e []string, _, _ io.Writer) error {
+		mu.Lock()
+		defer mu.Unlock()
+		env = slices.Clone(e)
+		return nil
+	}
+	acked := ackedCount(srv)
+	if _, _, err := listenUntil(t, app, func() bool { return acked() == 1 }, append([]string{"--exec", "x"}, args...)...); err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return env
+}
+
+func TestListenExecChildGetsAPuppetListenersCredential(t *testing.T) {
+	srv := socktest.New(t)
+	env := execEnv(t, testApp(t, srv), srv)
+	if !slices.Contains(env, "SOCK_TOKEN="+socktest.Token) || !slices.Contains(env, "SOCK_URL="+srv.URL) {
+		t.Fatalf("child env %v lacks the listener's puppet credential", env)
+	}
+}
+
+func TestListenExecChildNeverGetsAHumanToken(t *testing.T) {
+	srv := socktest.New(t)
+	app := testApp(t, srv)
+	get := app.Getenv
+	app.Getenv = func(k string) string {
+		if k == "SOCK_TOKEN" {
+			return socktest.HumanToken
+		}
+		return get(k)
+	}
+	srv.Streams = []socktest.StreamScript{{Events: []*sockv1.SubscribeResponse{socktest.Event(socktest.Text("m-1", "c-1", 1, "hi"))}, Hold: true}}
+	var env []string
+	app.RunExec = func(_ context.Context, _ string, _ []byte, e []string, _, _ io.Writer) error {
+		env = slices.Clone(e)
+		return nil
+	}
+	acked := ackedCount(srv)
+	if _, _, err := listenUntil(t, app, func() bool { return acked() == 1 }, "--exec", "x"); err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	for _, e := range env {
+		if strings.HasPrefix(e, "SOCK_TOKEN=") || strings.Contains(e, socktest.HumanToken) {
+			t.Fatalf("child env %v carries the human token", env)
+		}
+	}
+}
+
+// listen --as-puppet resolves the credential as send --as-puppet does (never
+// the login) and hands that credential to the child.
+func TestListenAsPuppetResolvesThePuppetAndHandsItToTheChild(t *testing.T) {
+	srv := socktest.New(t)
+	app := puppetApp(t, srv, map[string]string{"SOCK_URL": srv.URL, "SOCK_TOKEN": socktest.Token}, "")
+	env := execEnv(t, app, srv, "--as-puppet")
+	if !slices.Contains(env, "SOCK_TOKEN="+socktest.Token) || !slices.Contains(env, "SOCK_URL="+srv.URL) {
+		t.Fatalf("child env %v", env)
+	}
+}
+
+func TestListenAsPuppetRefusesALoginAndAMissingCredential(t *testing.T) {
+	srv := socktest.New(t)
+	app := puppetApp(t, srv, map[string]string{"SOCK_URL": srv.URL, "SOCK_TOKEN": socktest.HumanToken}, "")
+	if _, _, err := listenUntil(t, app, func() bool { return true }, "--as-puppet", "--exec", "x"); err == nil {
+		t.Fatal("a human session token was accepted as a puppet")
+	}
+	app = puppetApp(t, srv, map[string]string{"SOCK_URL": srv.URL}, "")
+	if _, _, err := listenUntil(t, app, func() bool { return true }, "--as-puppet", "--exec", "x"); err == nil {
+		t.Fatal("no credential was accepted")
 	}
 }

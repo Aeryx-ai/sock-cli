@@ -44,7 +44,7 @@ func newSendCmd(app *App) *cobra.Command {
 				recheck func(context.Context) (Clients, error)
 			)
 			if asPuppet {
-				c, recheck, err = app.puppetClients(cmd.Context(), project, cmd.ErrOrStderr())
+				c, recheck, err = app.puppetClients(cmd.Context(), project, true, cmd.ErrOrStderr())
 			} else {
 				c, err = app.clients()
 			}
