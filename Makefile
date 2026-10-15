@@ -3,7 +3,7 @@ LDFLAGS := -X main.version=$(VERSION)
 GO_LICENSES := go run github.com/google/go-licenses/v2@v2.0.1
 
 .DEFAULT_GOAL := build
-.PHONY: build test install redeploy check check-head lint fmt vet tidy licenses ci-pins pins
+.PHONY: build test install redeploy check check-head lint fmt vet tidy licenses ci-pins pins e2e-selfreg
 
 # Pins (ADR 1): every go target builds against the sock-contract and
 # sock-client tags in .contract-ref and .client-ref, the tags CI checks out,
@@ -99,3 +99,9 @@ check: ci-pins tidy fmt vet lint licenses test
 
 check-head:
 	$(MAKE) check PINS=
+
+# Unattended self-registration test against the local dev hub (sock-server:
+# make dev-up). Not part of check: it needs the hub, Docker and a sock-mcp.
+# SOCK_MCP defaults to the sock-mcp on PATH.
+e2e-selfreg: build
+	SOCK=$(CURDIR)/bin/sock scripts/e2e-selfreg.sh
