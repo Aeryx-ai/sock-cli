@@ -574,7 +574,7 @@ func TestListenReconnectHonorsRetryAfter(t *testing.T) {
 	srv := socktest.New(t)
 	srv.Streams = []socktest.StreamScript{
 		{End: socktest.RateLimited("5")},
-		{End: socktest.RateLimited("600")}, // above reconnectMax
+		{End: socktest.RateLimited("600")}, // above the backoff cap: honored in full
 		{End: socktest.RateLimited("0")},   // below the backoff
 	}
 	app := testApp(t, srv)
@@ -583,7 +583,7 @@ func TestListenReconnectHonorsRetryAfter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	want := []time.Duration{5 * time.Second, time.Minute, 4 * time.Second}
+	want := []time.Duration{5 * time.Second, 10 * time.Minute, 4 * time.Second}
 	if w := waits(); !slices.Equal(w, want) {
 		t.Fatalf("waits %v, want %v", w, want)
 	}
@@ -780,28 +780,6 @@ func TestReconnectable(t *testing.T) {
 				t.Fatalf("reconnectable(%v) = %v, want %v", c.err, got, c.want)
 			}
 		})
-	}
-}
-
-func TestListenBackoffCapsAtReconnectMax(t *testing.T) {
-	srv := socktest.New(t)
-	for range 7 {
-		srv.Streams = append(srv.Streams, socktest.StreamScript{End: socktest.Unavailable()})
-	}
-	app := testApp(t, srv)
-	waits := recordSleeps(&app.Sleep)
-	_, _, err := listenUntil(t, app, func() bool { return subscribes(srv) >= 8 })
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, time.Minute}
-	if w := waits(); len(w) < len(want) || !slices.Equal(w[:len(want)], want) {
-		t.Fatalf("waits %v, want prefix %v", w, want)
-	}
-	for _, w := range waits() {
-		if w > time.Minute {
-			t.Fatalf("wait %v exceeds the 1m cap", w)
-		}
 	}
 }
 
@@ -1140,5 +1118,40 @@ func TestSendRefusesAMalformedIdempotencyKeyBeforeAnyRequest(t *testing.T) {
 	srv := socktest.New(t)
 	if _, _, err := run(t, testApp(t, srv), nil, "send", "--idempotency-key", strings.Repeat("a", 128), "hi"); err != nil {
 		t.Fatalf("a 128 character key is valid: %v", err)
+	}
+}
+
+// A hub restart must not leave the listener dark for a minute: the reconnect
+// backoff tops out at 5s, so the stream is back within seconds of the hub.
+func TestListenReconnectBackoffTopsOutAtFiveSeconds(t *testing.T) {
+	srv := socktest.New(t)
+	for range 7 {
+		srv.Streams = append(srv.Streams, socktest.StreamScript{End: socktest.Unavailable()})
+	}
+	app := testApp(t, srv)
+	waits := recordSleeps(&app.Sleep)
+	_, _, err := listenUntil(t, app, func() bool { return subscribes(srv) >= 8 })
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	s := time.Second
+	if w, want := waits(), []time.Duration{s, 2 * s, 4 * s, 5 * s, 5 * s, 5 * s, 5 * s}; !slices.Equal(w, want) {
+		t.Fatalf("waits %v, want %v", w, want)
+	}
+}
+
+// The hub's Retry-After is honored in full, not cut to the backoff cap:
+// reconnecting sooner is what the header says not to do.
+func TestListenHonorsALongRetryAfter(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{{End: socktest.RateLimited("600")}, {Hold: true}}
+	app := testApp(t, srv)
+	waits := recordSleeps(&app.Sleep)
+	_, _, err := listenUntil(t, app, func() bool { return subscribes(srv) >= 2 })
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if w := waits(); len(w) != 1 || w[0] != 10*time.Minute {
+		t.Fatalf("waits %v, want [10m0s]", w)
 	}
 }

@@ -19,7 +19,15 @@ import (
 
 const (
 	reconnectBase = time.Second
-	reconnectMax  = time.Minute
+	// reconnectMax tops out the backoff between stream attempts. It is short
+	// on purpose: a hub deploy or restart must not leave the listener dark
+	// for a minute, and one reconnect attempt every few seconds is cheap.
+	reconnectMax = 5 * time.Second
+	// maxRetryAfter bounds a server-sent Retry-After, which is honored in
+	// full otherwise: reconnecting sooner is what the header says not to do.
+	maxRetryAfter = time.Hour
+	// execRetryMax tops out the backoff between --exec retries of one message.
+	execRetryMax = time.Minute
 	// heartbeatInterval is how often the server sends a heartbeat on an
 	// idle stream (sock.v1 Subscribe contract).
 	heartbeatInterval = 30 * time.Second
@@ -124,7 +132,7 @@ func (l *listener) Run(ctx context.Context) error {
 		if err != nil {
 			reason = l.app.describe(client.Describe(err)).Error()
 			if ra, ok := client.RetryAfter(err, time.Now()); ok {
-				wait = min(max(wait, ra), reconnectMax)
+				wait = min(max(wait, ra), maxRetryAfter)
 			}
 		}
 		l.logf("%s; reconnecting in %s", reason, wait)
@@ -226,7 +234,7 @@ func (l *listener) runExec(ctx context.Context, id string, payload []byte, env [
 		if l.app.Sleep(ctx, wait) != nil {
 			return err
 		}
-		backoff = min(backoff*2, reconnectMax)
+		backoff = min(backoff*2, execRetryMax)
 	}
 }
 
