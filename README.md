@@ -81,7 +81,7 @@ An `<account>` is an account id or `@handle`.
     sock conversations add <conversation id> <account>
     sock conversations remove <conversation id> <account>
     sock conversations leave <conversation id>
-    sock send [--conversation <id>] [--idempotency-key <k>] [--as-puppet [--project <dir>]] [text...]
+    sock send [--conversation <id>] [--idempotency-key <k>] [--as-puppet [--project <dir> | --session <platform>:<id> [--session-name <name>]]] [text...]
     sock listen [--exec <cmd>]
     sock fetch [--no-ack]
     sock ack <message id>...
@@ -99,6 +99,8 @@ An `<account>` is an account id or `@handle`.
 `sock login` also mints a machine key for this host and keeps it as `machine_key` in the config file (unless the file already has one), so one sign-in is enough: sock-mcp then makes each project its own puppet, `<project> on <host>`. A key that cannot be minted does not undo the login; it says to run `sock machine-key create | sock machine-key use`. `make e2e-selfreg` runs the whole flow unattended against the local dev hub (a fresh HOME, the seeded owner standing in for the browser, two projects, routing, cache).
 
 `send --as-puppet` speaks as the puppet sock-mcp would, through the same sock-client decision: `SOCK_TOKEN`, else the config file's `machine_key` (the puppet of the project in `--project`, default the working directory; `CLAUDE_PROJECT_DIR` wins when set), else its `puppet_token`. It never uses your login. A cached project puppet token is used without asking the hub first; when the hub rejects it (the puppet was erased) the token is checked, replaced and the message sent once more. Puppets of removed repositories are swept at most every 6 hours. A hook passes the directory its sock-mcp starts in, so a Codex plugin hook passes `PLUGIN_ROOT` and both land on `puppet_token`.
+
+`send --as-puppet --session <platform>:<id>` speaks as that agent session's own puppet (sock-contract ADR 27), the one sock-mcp uses for the session: platform `claude-code` or `codex`, made with the machine key (`SOCK_TOKEN` or the file's `machine_key`; anything else is refused) on the session's first send and cached with sock-mcp's. It is named `--session-name`, else the working directory's name and the first 8 characters of the session id, and renamed when `--session-name` changes; a failed rename is said on stderr and the message still goes. `--session` and `--project` are exclusive.
 
 `puppets create` and `puppets token` print the token alone on stdout so it pipes; everything else they say goes to stderr. `report --evidence` takes up to 20 messages, one per line, exactly as `sock fetch --json` printed them. `puppets prune` lists the puppets named `<project> on <host>` that the config file's `machine_key` did not make (project puppets from before machine keys, or of a revoked key), leaving out system and connector puppets and, without `--with-tokens`, any holding a token; another machine's key cannot be asked, so read the list. `puppets erase`, `puppets prune` and `account erase` ask on a terminal; off one they need `--yes` or `--confirm <handle>`.
 

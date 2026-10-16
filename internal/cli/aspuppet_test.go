@@ -12,6 +12,9 @@ import (
 	"sync"
 	"testing"
 
+	"connectrpc.com/connect"
+
+	client "github.com/guygrigsby/sock-client"
 	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 
 	"github.com/guygrigsby/sock-cli/internal/socktest"
@@ -58,7 +61,7 @@ func notifiedAs(srv *socktest.Server) []string {
 // sentOnly checks stdout is send's one line for text and nothing else.
 func sentOnly(t *testing.T, out, text string) {
 	t.Helper()
-	if strings.Count(out, "\n") != 1 || !strings.Contains(out, "owner-dm #1") || !strings.HasSuffix(out, ": "+text+"\n") {
+	if strings.Count(out, "\n") != 1 || !strings.Contains(out, "owner-dm #") || !strings.HasSuffix(out, ": "+text+"\n") {
 		t.Fatalf("stdout %q is not just send's output", out)
 	}
 }
@@ -329,5 +332,179 @@ func TestListenAsPuppetRefusesALoginAndAMissingCredential(t *testing.T) {
 	app = puppetApp(t, srv, map[string]string{"SOCK_URL": srv.URL}, "")
 	if _, _, err := listenUntil(t, app, func() bool { return true }, "--as-puppet", "--exec", "x"); err == nil {
 		t.Fatal("no credential was accepted")
+	}
+}
+
+// machineKeyFile is a config file whose machine key speaks for this host.
+func machineKeyFile(srv *socktest.Server) string {
+	return fmt.Sprintf("url = %q\nmachine_key = %q\n", srv.URL, socktest.MachineKeyToken) + loginFile + sharedFile
+}
+
+// createdNames is the name each CreatePuppet asked for.
+func createdNames(srv *socktest.Server) []string {
+	var out []string
+	for _, c := range srv.CallsTo("CreatePuppet") {
+		out = append(out, c.Msg.(*sockv1.CreatePuppetRequest).GetName())
+	}
+	return out
+}
+
+// renamedTo is the name each UpdateDisplayName set, checked to go out with
+// the session puppet's own token.
+func renamedTo(t *testing.T, srv *socktest.Server) []string {
+	t.Helper()
+	var out []string
+	for _, c := range srv.CallsTo("UpdateDisplayName") {
+		if a := c.Header.Get("Authorization"); a != "Bearer sock_pt_device-new_secret" {
+			t.Fatalf("renamed with %q", a)
+		}
+		out = append(out, c.Msg.(*sockv1.UpdateDisplayNameRequest).GetDisplayName())
+	}
+	return out
+}
+
+// noToken checks neither stream carries a token.
+func noToken(t *testing.T, out, errOut string) {
+	t.Helper()
+	if strings.Contains(out+errOut, "sock_") || strings.Contains(out+errOut, "secret") {
+		t.Fatalf("a token reached the output: stdout %q stderr %q", out, errOut)
+	}
+}
+
+func TestSendAsPuppetSessionFlagMisuse(t *testing.T) {
+	srv := socktest.New(t)
+	for want, args := range map[string][]string{
+		"--session needs --as-puppet":    {"send", "--session", "claude-code:abc", "hi"},
+		"--session-name needs --session": {"send", "--as-puppet", "--session-name", "x", "hi"},
+		"--project and --session":        {"send", "--as-puppet", "--project", "/tmp", "--session", "claude-code:abc", "hi"},
+		"session platform must be":       {"send", "--as-puppet", "--session", "slack:abc", "hi"},
+		"session id must be":             {"send", "--as-puppet", "--session", "codex:a/b", "hi"},
+	} {
+		if _, _, err := run(t, puppetApp(t, srv, nil, machineKeyFile(srv)), nil, args...); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%v: err %v, want %q", args, err, want)
+		}
+	}
+	if len(srv.Calls) != 0 {
+		t.Fatalf("called %v", srv.Calls)
+	}
+}
+
+// a session puppet is made with the machine key; any other credential, or
+// none, is refused with what to run
+func TestSendAsPuppetSessionNeedsAMachineKey(t *testing.T) {
+	srv := socktest.New(t)
+	url := fmt.Sprintf("url = %q\n", srv.URL)
+	for name, app := range map[string]*App{
+		"SOCK_TOKEN puppet token": puppetApp(t, srv, map[string]string{"SOCK_URL": srv.URL, "SOCK_TOKEN": socktest.Token}, ""),
+		"SOCK_TOKEN session":      puppetApp(t, srv, map[string]string{"SOCK_URL": srv.URL, "SOCK_TOKEN": socktest.HumanToken}, ""),
+		"file puppet_token":       puppetApp(t, srv, nil, url+loginFile+sharedFile),
+		"none":                    puppetApp(t, srv, nil, ""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, errOut, err := run(t, app, strings.NewReader("hi"), "send", "--as-puppet", "--session", "claude-code:abc")
+			if err == nil || !strings.Contains(err.Error(), "sock machine-key use") {
+				t.Fatalf("err = %v", err)
+			}
+			noToken(t, out+err.Error(), errOut)
+		})
+	}
+	if len(srv.Calls) != 0 {
+		t.Fatalf("called %v", srv.Calls)
+	}
+}
+
+// SOCK_TOKEN may carry the machine key too
+func TestSendAsPuppetSessionTakesAMachineKeyFromSockToken(t *testing.T) {
+	srv := socktest.New(t)
+	app := puppetApp(t, srv, map[string]string{"SOCK_URL": srv.URL, "SOCK_TOKEN": socktest.MachineKeyToken}, "")
+	out, errOut, err := run(t, app, strings.NewReader("hi"), "send", "--as-puppet", "--session", "codex:thread-1", "--session-name", "fix the build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentOnly(t, out, "hi")
+	noToken(t, out, errOut)
+	if got := notifiedAs(srv); len(got) != 1 || got[0] != "sock_pt_device-new_secret" {
+		t.Fatalf("sent as %q", got)
+	}
+}
+
+// the hook sends on every turn: the session's puppet is made once, by the
+// machine key, and every send goes out as it; with no name it is named for
+// the working directory and the first 8 of the session id
+func TestSendAsPuppetSessionEnsuresOnceWithTheFallbackName(t *testing.T) {
+	srv := socktest.New(t)
+	t.Chdir(repo(t, filepath.Join(t.TempDir(), "hookproj")))
+	app := puppetApp(t, srv, nil, machineKeyFile(srv))
+	for _, args := range [][]string{
+		{"send", "--as-puppet", "--session", "claude-code:0123456789abcdef", "one"},
+		{"send", "--as-puppet", "--session", "claude-code:0123456789abcdef", "--session-name", "  ", "two"},
+	} {
+		out, errOut, err := run(t, app, nil, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sentOnly(t, out, args[len(args)-1])
+		noToken(t, out, errOut)
+	}
+	creates := srv.CallsTo("CreatePuppet")
+	if len(creates) != 1 || creates[0].Header.Get("Authorization") != "Bearer "+socktest.MachineKeyToken {
+		t.Fatalf("creates %+v", creates)
+	}
+	if got, want := createdNames(srv), "hookproj 01234567 on "+client.ShortHost(); got[0] != want {
+		t.Fatalf("named %q, want %q", got[0], want)
+	}
+	if got := notifiedAs(srv); !slices.Equal(got, []string{"sock_pt_device-new_secret", "sock_pt_device-new_secret"}) {
+		t.Fatalf("sent as %q", got)
+	}
+	if n := len(srv.CallsTo("UpdateDisplayName")); n != 0 {
+		t.Fatalf("%d renames without a name", n)
+	}
+}
+
+// --session-name names the new puppet, and renames it only when it changes
+func TestSendAsPuppetSessionRenamesWhenTheNameChanges(t *testing.T) {
+	srv := socktest.New(t)
+	app := puppetApp(t, srv, nil, machineKeyFile(srv))
+	for _, name := range []string{"first", "first", "second"} {
+		out, errOut, err := run(t, app, strings.NewReader("hi"), "send", "--as-puppet", "--session", "codex:thread-1", "--session-name", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sentOnly(t, out, "hi")
+		noToken(t, out, errOut)
+	}
+	host := client.ShortHost()
+	if got := createdNames(srv); !slices.Equal(got, []string{"first on " + host}) {
+		t.Fatalf("created %q", got)
+	}
+	if got := renamedTo(t, srv); !slices.Equal(got, []string{"second on " + host}) {
+		t.Fatalf("renamed to %q", got)
+	}
+	if n := len(notifiedAs(srv)); n != 3 {
+		t.Fatalf("%d sends", n)
+	}
+}
+
+// a failed rename is said on stderr and the message still goes
+func TestSendAsPuppetSessionRenameFailureDoesNotFailTheSend(t *testing.T) {
+	srv := socktest.New(t)
+	app := puppetApp(t, srv, nil, machineKeyFile(srv))
+	send := func(name string) (string, string) {
+		t.Helper()
+		out, errOut, err := run(t, app, strings.NewReader("hi"), "send", "--as-puppet", "--session", "codex:thread-1", "--session-name", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sentOnly(t, out, "hi")
+		noToken(t, out, errOut)
+		return out, errOut
+	}
+	send("first")
+	srv.Fail = map[string]error{"UpdateDisplayName": socktest.Error(connect.CodeInvalidArgument, sockv1.ErrorReason_ERROR_REASON_FIELD_INVALID)}
+	if _, errOut := send("second"); !strings.Contains(errOut, "rename") {
+		t.Fatalf("stderr %q does not say the rename failed", errOut)
+	}
+	if n := len(notifiedAs(srv)); n != 2 {
+		t.Fatalf("%d sends", n)
 	}
 }

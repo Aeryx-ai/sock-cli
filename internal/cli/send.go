@@ -21,8 +21,8 @@ const maxTextBytes = 65536
 
 func newSendCmd(app *App) *cobra.Command {
 	var (
-		conversation, project, idemKey string
-		asPuppet                       bool
+		conversation, project, idemKey, session, sessionFlagName string
+		asPuppet                                                 bool
 	)
 	cmd := &cobra.Command{
 		Use:   "send [text...]",
@@ -31,6 +31,22 @@ func newSendCmd(app *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if project != "" && !asPuppet {
 				return errors.New("--project needs --as-puppet")
+			}
+			if session != "" && !asPuppet {
+				return errors.New("--session needs --as-puppet")
+			}
+			if sessionFlagName != "" && session == "" {
+				return errors.New("--session-name needs --session")
+			}
+			if project != "" && session != "" {
+				return errors.New("--project and --session name different puppets; pass one")
+			}
+			var sess client.Session
+			if session != "" {
+				var err error
+				if sess, err = client.ParseSession(session); err != nil {
+					return fmt.Errorf("--session: %w", err)
+				}
 			}
 			if cmd.Flags().Changed("idempotency-key") && !validIdempotencyKey(idemKey) {
 				return errors.New("--idempotency-key must be 1 to 128 characters of A-Z a-z 0-9 . _ : -, starting with a letter or digit")
@@ -43,9 +59,13 @@ func newSendCmd(app *App) *cobra.Command {
 				c       Clients
 				recheck func(context.Context) (Clients, error)
 			)
-			if asPuppet {
+			switch {
+			case session != "":
+				name, set := sessionName(sess, sessionFlagName)
+				c, err = app.sessionPuppetClients(cmd.Context(), sess, name, set, cmd.ErrOrStderr())
+			case asPuppet:
 				c, recheck, err = app.puppetClients(cmd.Context(), project, true, cmd.ErrOrStderr())
-			} else {
+			default:
 				c, err = app.clients()
 			}
 			if err != nil {
@@ -90,6 +110,8 @@ func newSendCmd(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&conversation, "conversation", "", "conversation id (default: your owner)")
 	cmd.Flags().BoolVar(&asPuppet, "as-puppet", false, "send as the puppet sock-mcp would: SOCK_TOKEN, else the config file's machine_key (the project's puppet), else its puppet_token; never your login")
 	cmd.Flags().StringVar(&idemKey, "idempotency-key", "", "key the hub dedupes this send by (1 to 128 of A-Z a-z 0-9 . _ : -); a rerun with the same key posts at most once (default: a fresh key per invocation)")
+	cmd.Flags().StringVar(&session, "session", "", "with --as-puppet, send as this agent session's own puppet, <platform>:<session id> (platform claude-code or codex), made with the machine key on its first send")
+	cmd.Flags().StringVar(&sessionFlagName, "session-name", "", "with --session, the session's name; the puppet is renamed when it changes (default: the working directory's name and the first 8 of the session id)")
 	cmd.Flags().StringVar(&project, "project", "", "with --as-puppet, the directory sock-mcp starts in (default: the working directory; CLAUDE_PROJECT_DIR wins when set)")
 	return cmd
 }
