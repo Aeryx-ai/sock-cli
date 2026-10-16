@@ -86,6 +86,7 @@ func (a *App) sessionPuppetClients(ctx context.Context, s client.Session, name s
 		Dir:    client.ProjectsDir(a.Getenv, cfg),
 		Host:   client.ShortHost(),
 		Rename: client.NewRename(cfg, ua),
+		Check:  client.NewTokenCheck(cfg, ua),
 		Log:    func(f string, args ...any) { warnf(stderr, f, args...) },
 	}
 	tok, err := sp.Ensure(ctx, s, name)
