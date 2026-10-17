@@ -55,7 +55,7 @@ func TestPrecedenceFlagOverEnvOverFile(t *testing.T) {
 
 func TestDefaultURL(t *testing.T) {
 	got, err := Load(Sources{Getenv: env(map[string]string{"SOCK_TOKEN": tok}), Path: filepath.Join(t.TempDir(), "none")})
-	if err != nil || got.URL != "https://api.sock.aeryx.ai" {
+	if err != nil || got.URL != DefaultURL {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 	p := writeFile(t, 0o600, "token = \"sock_pt_file\"\n")
