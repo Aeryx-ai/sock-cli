@@ -1,6 +1,6 @@
 # sock-cli
 
-`sock` lets scripts, jobs and agents message you on [sock](https://github.com/guygrigsby/sock-contract), and lets you do everything the sock app does from a terminal.
+`sock` lets scripts, jobs and agents message you on [sock](https://github.com/aeryx-ai/sock-contract), and lets you do everything the sock app does from a terminal.
 
 ## Sign in as yourself
 

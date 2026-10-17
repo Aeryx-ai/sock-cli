@@ -43,8 +43,8 @@ ifneq ($(PINS),)
 			perl -e 'rename($$ARGV[0], $$ARGV[1]) or -d $$ARGV[1] or die "$$ARGV[1]: $$!\n"' "$$tmp" "$$dir"; \
 			rm -rf "$$tmp"; \
 		fi; \
-		echo "replace github.com/guygrigsby/sock-$$m => $$dir" >> $$work; \
-		edits="$$edits -replace=github.com/guygrigsby/sock-$$m=$$dir"; \
+		echo "replace github.com/$$(if [ $$m = contract ]; then echo aeryx-ai; else echo guygrigsby; fi)/sock-$$m => $$dir" >> $$work; \
+		edits="$$edits -replace=github.com/$$(if [ $$m = contract ]; then echo aeryx-ai; else echo guygrigsby; fi)/sock-$$m=$$dir"; \
 	done; \
 	GOWORK=off go mod edit $$edits -print > .pins/go.mod.$$$$; \
 	cp go.sum .pins/go.sum.$$$$; \
