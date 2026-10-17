@@ -351,7 +351,7 @@ func TestRegisterHelpNamesTerms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"https://aeryx.ai/sock/terms/", "https://aeryx.ai/sock/privacy/", "2026-10-11"} {
+	for _, want := range []string{"https://joinsock.com/terms/", "https://joinsock.com/privacy/", "2026-10-11"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("help lacks %s:\n%s", want, out)
 		}

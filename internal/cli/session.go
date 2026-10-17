@@ -21,8 +21,8 @@ import (
 // The documents the app links in SockKit/Legal.swift, and the terms version
 // this build ships.
 const (
-	termsURL     = "https://aeryx.ai/sock/terms/"
-	privacyURL   = "https://aeryx.ai/sock/privacy/"
+	termsURL     = "https://joinsock.com/terms/"
+	privacyURL   = "https://joinsock.com/privacy/"
 	termsVersion = "2026-10-11"
 )
 

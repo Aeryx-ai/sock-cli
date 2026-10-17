@@ -12,7 +12,7 @@ New to sock:
 
     sock register --invite <code> --handle <handle> --name "<display name>" --accept-terms 2026-10-11
 
-`--accept-terms` says you agree to the [terms of service](https://aeryx.ai/sock/terms/) and the [privacy policy](https://aeryx.ai/sock/privacy/); `sock register --help` names the version this build ships.
+`--accept-terms` says you agree to the [terms of service](https://joinsock.com/terms/) and the [privacy policy](https://joinsock.com/privacy/); `sock register --help` names the version this build ships.
 
 Both take `--label` (the device name in `sock devices`, default `sock CLI on <hostname>`), `--no-browser` (print the URL instead of opening it) and `--port` (the listener's port, 1024 to 65535). On a remote machine:
 
