@@ -61,7 +61,7 @@ func TestWhoamiHumanShowsTerms(t *testing.T) {
 func TestTerms(t *testing.T) {
 	app, srv := signedIn(t)
 	srv.AcceptedTerms = "2026-01-01"
-	if out, _ := mustRun(t, app, "terms"); out != "accepted 2026-01-01, current 2026-10-11\nhttps://aeryx.ai/sock/terms/\n" {
+	if out, _ := mustRun(t, app, "terms"); out != "accepted 2026-01-01, current 2026-10-11\nhttps://joinsock.com/terms/\n" {
 		t.Fatalf("terms: %q", out)
 	}
 	if out, _ := mustRun(t, app, "terms", "accept", "2026-10-11"); out != "accepted terms 2026-10-11\n" {
