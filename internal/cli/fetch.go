@@ -8,7 +8,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
-	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
+	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 )
 
 // fetchBatch is the FetchPending limit per call (spec allows 1 to 500).

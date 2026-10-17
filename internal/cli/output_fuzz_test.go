@@ -10,7 +10,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
+	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 )
 
 // terminalSafe fails t when out holds a control character (C0, DEL, C1)

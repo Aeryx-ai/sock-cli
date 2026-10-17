@@ -13,8 +13,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
+	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 	client "github.com/guygrigsby/sock-client"
-	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
 
 	"github.com/guygrigsby/sock-cli/internal/config"
 )

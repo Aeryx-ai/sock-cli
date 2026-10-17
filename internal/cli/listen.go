@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
 
-	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
+	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 
 	client "github.com/guygrigsby/sock-client"
 )

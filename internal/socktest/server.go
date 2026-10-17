@@ -19,8 +19,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	sockv1 "github.com/guygrigsby/sock-contract/gen/go/sock/v1"
-	"github.com/guygrigsby/sock-contract/gen/go/sock/v1/sockv1connect"
+	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
+	"github.com/aeryx-ai/sock-contract/gen/go/sock/v1/sockv1connect"
 )
 
 // Token is the puppet bearer token the fake accepts.
