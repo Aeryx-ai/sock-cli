@@ -1,9 +1,9 @@
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))
 LDFLAGS := -X main.version=$(VERSION)
 GO_LICENSES := go run github.com/google/go-licenses/v2@v2.0.1
 
 .DEFAULT_GOAL := build
-.PHONY: build test install redeploy check check-head lint fmt vet tidy licenses ci-pins pins e2e-selfreg
+.PHONY: build test install redeploy check check-head lint fmt vet tidy licenses ci-pins pins e2e-selfreg dist
 
 # Pins (ADR 1): every go target builds against the sock-contract and
 # sock-client tags in .contract-ref and .client-ref, the tags CI checks out,
@@ -105,3 +105,23 @@ check-head:
 # SOCK_MCP defaults to the sock-mcp on PATH.
 e2e-selfreg: build
 	SOCK=$(CURDIR)/bin/sock scripts/e2e-selfreg.sh
+
+# dist cross-builds the release archives publish-release.sh uploads, one per
+# platform, all at once: sock-<os>-<arch>.tar.gz (.zip on Windows) holding the
+# binary and LICENSE at the archive root. The release workflow runs this.
+DIST_PLATFORMS := darwin-arm64 darwin-amd64 linux-arm64 linux-amd64 windows-amd64
+
+dist: pins
+	rm -rf bin/dist bin/dist-stage
+	$(MAKE) -j$(words $(DIST_PLATFORMS)) $(addprefix dist-,$(DIST_PLATFORMS)) VERSION=$(VERSION)
+	rm -rf bin/dist-stage
+
+# Inside dist-%: $* is <os>-<arch>.
+dist_os = $(word 1,$(subst -, ,$*))
+dist_exe = sock$(if $(filter windows,$(dist_os)),.exe)
+
+dist-%:
+	mkdir -p bin/dist bin/dist-stage/$*
+	CGO_ENABLED=0 GOOS=$(dist_os) GOARCH=$(word 2,$(subst -, ,$*)) go build -trimpath -ldflags "$(LDFLAGS)" -o bin/dist-stage/$*/$(dist_exe) ./cmd/sock
+	cp LICENSE bin/dist-stage/$*/
+	$(if $(filter windows,$(dist_os)),cd bin/dist-stage/$* && zip -qX ../../dist/sock-$*.zip $(dist_exe) LICENSE,COPYFILE_DISABLE=1 tar -czf bin/dist/sock-$*.tar.gz -C bin/dist-stage/$* $(dist_exe) LICENSE)
