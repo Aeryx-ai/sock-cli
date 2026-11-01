@@ -9,8 +9,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aeryx-ai/sock-cli/internal/config"
+	client "github.com/aeryx-ai/sock-client"
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
-	client "github.com/guygrigsby/sock-client"
 )
 
 // newPuppetPruneCmd erases the project puppets no machine key can sweep: those

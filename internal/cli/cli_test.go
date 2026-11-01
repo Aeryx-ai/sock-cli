@@ -23,7 +23,7 @@ import (
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 
 	"github.com/aeryx-ai/sock-cli/internal/socktest"
-	"github.com/guygrigsby/sock-client"
+	"github.com/aeryx-ai/sock-client"
 )
 
 // run executes the root command with args and returns what it printed.

@@ -3,7 +3,7 @@ package cli
 import (
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 
-	client "github.com/guygrigsby/sock-client"
+	client "github.com/aeryx-ai/sock-client"
 )
 
 const (

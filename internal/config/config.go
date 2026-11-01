@@ -16,7 +16,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	client "github.com/guygrigsby/sock-client"
+	client "github.com/aeryx-ai/sock-client"
 )
 
 // DefaultURL is the public sock hub, used when no flag, env or file names one.

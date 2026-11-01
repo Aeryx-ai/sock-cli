@@ -19,7 +19,7 @@ import (
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 
 	"github.com/aeryx-ai/sock-cli/internal/config"
-	client "github.com/guygrigsby/sock-client"
+	client "github.com/aeryx-ai/sock-client"
 )
 
 // App holds everything commands depend on, so tests can substitute any of it.

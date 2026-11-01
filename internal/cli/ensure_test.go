@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	client "github.com/guygrigsby/sock-client"
+	client "github.com/aeryx-ai/sock-client"
 
 	"github.com/aeryx-ai/sock-cli/internal/socktest"
 )

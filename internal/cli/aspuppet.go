@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	client "github.com/guygrigsby/sock-client"
+	client "github.com/aeryx-ai/sock-client"
 )
 
 // The --as-puppet refusals are fixed text a hook can match; neither names a

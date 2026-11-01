@@ -1,5 +1,6 @@
 bin/
-.pins/
+go.work
+go.work.sum
 
 # Local tooling state, never tracked
 .beads/

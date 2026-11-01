@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	client "github.com/guygrigsby/sock-client"
+	client "github.com/aeryx-ai/sock-client"
 )
 
 func env(m map[string]string) func(string) string {

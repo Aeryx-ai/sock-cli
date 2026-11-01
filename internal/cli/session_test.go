@@ -22,7 +22,7 @@ import (
 
 	"github.com/aeryx-ai/sock-cli/internal/config"
 	"github.com/aeryx-ai/sock-cli/internal/socktest"
-	client "github.com/guygrigsby/sock-client"
+	client "github.com/aeryx-ai/sock-client"
 )
 
 // humanApp points an App at srv with no token anywhere and a config file

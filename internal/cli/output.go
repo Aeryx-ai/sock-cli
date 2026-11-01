@@ -10,8 +10,8 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
+	client "github.com/aeryx-ai/sock-client"
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
-	client "github.com/guygrigsby/sock-client"
 )
 
 // Printer writes messages, accounts and conversations as text or JSON lines.

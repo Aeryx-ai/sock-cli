@@ -2,7 +2,7 @@ package cli
 
 import (
 	"github.com/aeryx-ai/sock-cli/internal/config"
-	client "github.com/guygrigsby/sock-client"
+	client "github.com/aeryx-ai/sock-client"
 )
 
 // Clients are the sock services a human or puppet calls.

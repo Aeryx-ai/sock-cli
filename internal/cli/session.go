@@ -14,8 +14,8 @@ import (
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 
 	"github.com/aeryx-ai/sock-cli/internal/config"
-	client "github.com/guygrigsby/sock-client"
-	"github.com/guygrigsby/sock-client/login"
+	client "github.com/aeryx-ai/sock-client"
+	"github.com/aeryx-ai/sock-client/login"
 )
 
 // The documents the app links in SockKit/Legal.swift, and the terms version

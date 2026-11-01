@@ -22,7 +22,7 @@ or, with Go:
     make test
     make check    # everything CI runs
 
-Building from source needs `sock-contract` and `sock-client` checked out beside this repo; `AGENTS.md` has the details.
+`go.mod` pins `sock-contract` and `sock-client`; to build against local checkouts, use an untracked `go.work`.
 
 Docs: [joinsock.com/docs](https://joinsock.com/docs). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md). Security: [SECURITY.md](SECURITY.md).
 
