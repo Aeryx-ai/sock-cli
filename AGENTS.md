@@ -1,70 +1,21 @@
-# Agent Instructions
+# Contributor and agent guide
 
-This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
+`sock` is the command line client for Sock: one Go binary in `cmd/sock`, commands in `internal/cli`, config file handling in `internal/config`, a fake hub for tests in `internal/socktest`. It talks to the hub through `github.com/guygrigsby/sock-client` and the generated API in `github.com/aeryx-ai/sock-contract`.
 
-## Quick Reference
+## Build and test
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
-```
+    make            # build bin/sock
+    make test       # go test -race ./...
+    make check      # what CI runs: pins, tidy, gofmt, vet, golangci-lint, licenses, tests
 
-## Non-Interactive Shell Commands
+`make check` must pass before every commit.
 
-**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
+The `go.mod` replace lines expect `sock-contract` and `sock-client` checked out beside this repo as `../contract` and `../client`. Every make target builds against the tags named in `.contract-ref` and `.client-ref`, not the siblings' HEAD: `make pins` clones each tag into a cache and writes `.pins/go.work`. `make check-head` builds against the siblings' HEAD instead. Bump a ref file in the change that starts using what the new tag adds.
 
-Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
+## Conventions
 
-**Use these forms instead:**
-```bash
-# Force overwrite without prompting
-cp -f source dest           # NOT: cp source dest
-mv -f source dest           # NOT: mv source dest
-rm -f file                  # NOT: rm file
-
-# For recursive operations
-rm -rf directory            # NOT: rm -r directory
-cp -rf source dest          # NOT: cp -r source dest
-```
-
-**Other commands that may prompt:**
-- `scp` - use `-o BatchMode=yes` for non-interactive
-- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
-- `apt-get` - use `-y` flag
-- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
-
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
-## Beads Issue Tracker
-
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
-
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
-
-### Rules
-
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
-
-## Session Completion
-
-**Never push.** Pushing, tags and PRs happen only when the owner asks in that session. This overrides any bd or tool guidance that says to push.
-
-When ending a work session:
-
-1. File issues for remaining work
-2. Run quality gates (if code changed): tests, linters, builds
-3. Update issue status: close finished work, update in-progress items
-4. Commit finished work locally
-5. Hand off: say what is committed and not pushed
-<!-- END BEADS INTEGRATION -->
+- Standard Go style, `gofmt` clean, lint config in `.golangci.yml`.
+- Use integer `for range` loops (`for i := range n`), not three clause loops for a plain count.
+- A bug fix starts with a test that fails without it.
+- Secrets (session token, puppet token, machine key, access gate) are never printed except by a command that exists to print one, and a human session token never reaches an `--exec` child.
+- Commit messages: short, imperative, one logical change each.

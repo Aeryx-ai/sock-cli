@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "sock_cli",
-  "project_id": "5a133daf-fa71-4a1e-9a54-3ca5addecff5"
-}
