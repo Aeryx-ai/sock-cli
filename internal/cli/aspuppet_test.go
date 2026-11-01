@@ -17,7 +17,7 @@ import (
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 	client "github.com/guygrigsby/sock-client"
 
-	"github.com/guygrigsby/sock-cli/internal/socktest"
+	"github.com/aeryx-ai/sock-cli/internal/socktest"
 )
 
 // puppetApp is a hook's start: getenv over vars (private state and home

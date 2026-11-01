@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/guygrigsby/sock-cli/internal/config"
+	"github.com/aeryx-ai/sock-cli/internal/config"
 	client "github.com/guygrigsby/sock-client"
 )
 

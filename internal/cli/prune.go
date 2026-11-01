@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/aeryx-ai/sock-cli/internal/config"
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
-	"github.com/guygrigsby/sock-cli/internal/config"
 	client "github.com/guygrigsby/sock-client"
 )
 

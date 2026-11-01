@@ -1,4 +1,4 @@
-module github.com/guygrigsby/sock-cli
+module github.com/aeryx-ai/sock-cli
 
 go 1.26.9
 

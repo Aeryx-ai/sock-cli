@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/guygrigsby/sock-cli/internal/cli"
+	"github.com/aeryx-ai/sock-cli/internal/cli"
 )
 
 // version is set by -ldflags "-X main.version=...".

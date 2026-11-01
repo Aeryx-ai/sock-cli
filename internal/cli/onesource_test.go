@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/guygrigsby/sock-cli/internal/socktest"
+	"github.com/aeryx-ai/sock-cli/internal/socktest"
 )
 
 // A session token from the file goes only to the file's server, logout too.

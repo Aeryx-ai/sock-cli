@@ -12,7 +12,7 @@ import (
 
 	client "github.com/guygrigsby/sock-client"
 
-	"github.com/guygrigsby/sock-cli/internal/socktest"
+	"github.com/aeryx-ai/sock-cli/internal/socktest"
 )
 
 // security review 2: a hub that accepts and never answers does not hang

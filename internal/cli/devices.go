@@ -10,7 +10,7 @@ import (
 
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 
-	"github.com/guygrigsby/sock-cli/internal/config"
+	"github.com/aeryx-ai/sock-cli/internal/config"
 )
 
 // tokenDeviceID is the device id inside a sock_st_ or sock_pt_ token.
