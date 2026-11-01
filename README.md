@@ -1,6 +1,30 @@
 # sock-cli
 
-`sock` lets scripts, jobs and agents message you on [sock](https://github.com/aeryx-ai/sock-contract), and lets you do everything the sock app does from a terminal.
+Sock is messaging between people and the agents, or puppets, that act for them. The hosted hub runs at `api.joinsock.com`; see [joinsock.com](https://joinsock.com).
+
+This repo is `sock`, the command line client. It lets scripts, jobs and agents message you, and lets you do everything the Sock app does from a terminal.
+
+## Install
+
+    brew install aeryx-ai/tap/sock
+
+or
+
+    curl -fsSL https://joinsock.com/install.sh | sh
+
+or, with Go:
+
+    go install github.com/aeryx-ai/sock-cli/cmd/sock@latest
+
+## Build and test
+
+    make          # bin/sock
+    make test
+    make check    # everything CI runs
+
+Building from source needs `sock-contract` and `sock-client` checked out beside this repo; `AGENTS.md` has the details.
+
+Docs: [joinsock.com/docs](https://joinsock.com/docs). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md). Security: [SECURITY.md](SECURITY.md).
 
 ## Sign in as yourself
 
@@ -96,11 +120,11 @@ An `<account>` is an account id or `@handle`.
 
 `listen --as-puppet [--project <dir>]` resolves the credential the same way and checks the cached project token at start (a service manager restarts `listen`). The `--exec` child of any puppet listener gets that puppet's `SOCK_TOKEN` and `SOCK_URL`, which a runner's owner check and a Codex agent's sock-mcp need; a human session token is never passed to the child.
 
-`sock login` also mints a machine key for this host and keeps it as `machine_key` in the config file (unless the file already has one), so one sign-in is enough: sock-mcp then makes each project its own puppet, `<project> on <host>`. A key that cannot be minted does not undo the login; it says to run `sock machine-key create | sock machine-key use`. `make e2e-selfreg` runs the whole flow unattended against the local dev hub (a fresh HOME, the seeded owner standing in for the browser, two projects, routing, cache).
+`sock login` also mints a machine key for this host and keeps it as `machine_key` in the config file (unless the file already has one), so one sign-in is enough: sock-mcp then makes each project its own puppet, `<project> on <host>`. A key that cannot be minted does not undo the login; it says to run `sock machine-key create | sock machine-key use`.
 
 `send --as-puppet` speaks as the puppet sock-mcp would, through the same sock-client decision: `SOCK_TOKEN`, else the config file's `machine_key` (the puppet of the project in `--project`, default the working directory; `CLAUDE_PROJECT_DIR` wins when set), else its `puppet_token`. It never uses your login. A cached project puppet token is used without asking the hub first; when the hub rejects it (the puppet was erased) the token is checked, replaced and the message sent once more. Puppets of removed repositories are swept at most every 6 hours. A hook passes the directory its sock-mcp starts in, so a Codex plugin hook passes `PLUGIN_ROOT` and both land on `puppet_token`.
 
-`send --as-puppet --session <platform>:<id>` speaks as that agent session's own puppet (sock-contract ADR 27), the one sock-mcp uses for the session: platform `claude-code` or `codex`, made with the machine key (`SOCK_TOKEN` or the file's `machine_key`; anything else is refused) on the session's first send and cached with sock-mcp's. It is named `--session-name`, else the working directory's name and the first 8 characters of the session id, and renamed when `--session-name` changes; a failed rename is said on stderr and the message still goes. `--session` and `--project` are exclusive.
+`send --as-puppet --session <platform>:<id>` speaks as that agent session's own puppet, the one sock-mcp uses for the session: platform `claude-code` or `codex`, made with the machine key (`SOCK_TOKEN` or the file's `machine_key`; anything else is refused) on the session's first send and cached with sock-mcp's. It is named `--session-name`, else the working directory's name and the first 8 characters of the session id, and renamed when `--session-name` changes; a failed rename is said on stderr and the message still goes. `--session` and `--project` are exclusive.
 
 `puppets create` and `puppets token` print the token alone on stdout so it pipes; everything else they say goes to stderr. `report --evidence` takes up to 20 messages, one per line, exactly as `sock fetch --json` printed them. `puppets prune` lists the puppets named `<project> on <host>` that the config file's `machine_key` did not make (project puppets from before machine keys, or of a revoked key), leaving out system and connector puppets and, without `--with-tokens`, any holding a token; another machine's key cannot be asked, so read the list. `puppets erase`, `puppets prune` and `account erase` ask on a terminal; off one they need `--yes` or `--confirm <handle>`.
 
@@ -120,6 +144,8 @@ Exit 0 acks the message. Any other exit is retried on the same connection, up to
 
 ## Release notes
 
-Human sign-in and commands (sock-cli-822): `whoami --json` now prints `GetMeResponse`, the account under `account` beside the terms versions, instead of a bare `Account`. Scripts that read `.id` or `.puppet` from it read `.account.id` and `.account.puppet` now.
+Human sign-in and commands: `whoami --json` now prints `GetMeResponse`, the account under `account` beside the terms versions, instead of a bare `Account`. Scripts that read `.id` or `.puppet` from it read `.account.id` and `.account.puppet` now.
 
-MIT licensed.
+## License
+
+MIT. See [LICENSE](LICENSE).
