@@ -308,7 +308,7 @@ func TestSetNewTokenRefusesExistingToken(t *testing.T) {
 	}
 }
 
-// sock-cli-kgh: the machine key sock-mcp reads when its environment has none
+// The machine key sock-mcp reads when its environment has none
 func TestSetMachineKeyRefusesAnotherWithoutForce(t *testing.T) {
 	p := writeFile(t, 0o600, "token = \"sock_st_h_secret\"\nmachine_key = \"sock_mk_old_secret\"\n")
 	if err := SetMachineKey(p, "sock_mk_new_secret", "https://x.example", "", false); !errors.Is(err, ErrMachineKeyExists) {

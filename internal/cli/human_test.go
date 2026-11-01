@@ -140,7 +140,7 @@ func TestDevices(t *testing.T) {
 	mk.Kind = sockv1.DeviceKind_DEVICE_KIND_MACHINE_KEY
 	phone := socktest.Device("d-2", "human-1", "iPhone")
 	phone.Kind = sockv1.DeviceKind_DEVICE_KIND_SESSION
-	// the first is unset, as from a server before ADR 10: a human's device is a session
+	// the first is unset, as from a server older than device kinds: a human's device is a session
 	srv.Devices = []*sockv1.Device{socktest.Device(socktest.HumanDeviceID, "human-1", "sock CLI on box"), phone, mk}
 	out, _ := mustRun(t, app, "devices")
 	want := socktest.HumanDeviceID + "  session  sock CLI on box  created " + fixed + "  (this)\n" +
@@ -575,7 +575,7 @@ func TestPuppetsEnsureKeepsEachServersPuppetsApart(t *testing.T) {
 	}
 }
 
-// sock-cli-kgh: `machine-key use` keeps a machine key where sock-mcp reads it.
+// `machine-key use` keeps a machine key where sock-mcp reads it.
 // It comes on stdin, never argv (visible in ps), and is never printed.
 func TestMachineKeyUseSavesTheKeyFromStdin(t *testing.T) {
 	srv := socktest.New(t)

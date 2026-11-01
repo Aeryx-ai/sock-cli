@@ -188,7 +188,7 @@ func TestSendAsPuppetFlagMisuse(t *testing.T) {
 	}
 }
 
-// the hook sends on every turn (sock-cli-7ut): a cached project puppet token
+// the hook sends on every turn: a cached project puppet token
 // is used without asking the hub first, and a token the hub rejects (the
 // puppet was erased) is checked, replaced and the message sent once more
 func TestSendAsPuppetTrustsTheCachedTokenAndRecoversWhenItIsRejected(t *testing.T) {

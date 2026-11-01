@@ -1024,7 +1024,7 @@ func TestSendRateLimitedWithinMaxWaitsThenSends(t *testing.T) {
 }
 
 // nonMessageEvents are the Subscribe events listen must pass over: a read
-// marker (ADR 9), an event with no kind set, and a kind from a newer contract
+// marker, an event with no kind set, and a kind from a newer contract
 // (field 99, unknown to this build).
 func nonMessageEvents() []*sockv1.SubscribeResponse {
 	future := &sockv1.SubscribeResponse{}

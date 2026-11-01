@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Unattended self-registration test against the local dev hub (sock-server's
-# `make dev-up`, files in ~/.config/sock-dev). A fresh HOME, the dev hub's
+# Unattended self-registration test against a local Sock dev hub (its
+# files in ~/.config/sock-dev). A fresh HOME, the dev hub's
 # seeded owner session standing in for a browser sign-in (the real Apple
 # sign-in is a one-time human step on a new machine and is not part of any
 # test), then:
@@ -14,7 +14,7 @@ SOCK=${SOCK:-sock}
 SOCK_MCP=${SOCK_MCP:-sock-mcp}
 DEV=${SOCK_DEV_DIR:-$HOME/.config/sock-dev}
 for f in url owner.device1.token seed.json; do
-	[ -r "$DEV/$f" ] || { echo "e2e-selfreg: $DEV/$f missing: run make dev-up in sock-server first" >&2; exit 2; }
+	[ -r "$DEV/$f" ] || { echo "e2e-selfreg: $DEV/$f missing: start the local dev hub first" >&2; exit 2; }
 done
 command -v python3 >/dev/null || { echo "e2e-selfreg: python3 is required" >&2; exit 2; }
 

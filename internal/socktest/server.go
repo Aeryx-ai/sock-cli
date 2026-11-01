@@ -26,7 +26,7 @@ import (
 // Token is the puppet bearer token the fake accepts.
 const Token = "sock_pt_testdevice_testsecret"
 
-// MachineKeyToken is a machine key the fake accepts (ADR 10).
+// MachineKeyToken is a machine key the fake accepts.
 const MachineKeyToken = "sock_mk_mkdevice_mksecret"
 
 // HumanDeviceID is the device inside HumanToken.
@@ -105,7 +105,7 @@ type Server struct {
 	Devices []*sockv1.Device
 	Puppets []*sockv1.PuppetWithDevices
 	// MachineKeyPuppets, when set, is ListPuppets' answer to MachineKeyToken:
-	// the puppets that key created (ADR 10).
+	// the puppets that key created.
 	MachineKeyPuppets []*sockv1.PuppetWithDevices
 	// MintMachineKeyErr, when set, is MintMachineKey's answer.
 	MintMachineKeyErr error

@@ -98,7 +98,7 @@ var deviceKinds = map[sockv1.DeviceKind]string{
 
 // Device prints one device; this marks the calling device. indent prefixes
 // the text line (puppet devices under their puppet). unset is the kind of a
-// device whose kind is UNSPECIFIED, from a server before ADR 10: a session
+// device whose kind is UNSPECIFIED, from a server older than device kinds: a session
 // for a human's device, a puppet token for a puppet's.
 func (p Printer) Device(w io.Writer, d *sockv1.Device, this bool, indent string, unset sockv1.DeviceKind) error {
 	if p.JSON {

@@ -27,7 +27,7 @@ var errNoPuppetCred = errors.New(errNoPuppetCredential)
 // LoadPuppetConfig and ProjectPuppet, the decision ResolvePuppet shares with
 // sock-mcp. The human's token is never used. Lines from making the project's
 // puppet go to stderr. A cached project puppet token is used without asking
-// the hub first (sock-cli-7ut); for a machine key, recheck resolves again with
+// the hub first; for a machine key, recheck resolves again with
 // that check, replacing the token of an erased puppet, and is for a call the
 // hub answered TOKEN_INVALID. It is nil for any other credential.
 func (a *App) puppetClients(ctx context.Context, project string, trustCache bool, stderr io.Writer) (c Clients, recheck func(context.Context) (Clients, error), err error) {
@@ -67,8 +67,8 @@ func (a *App) puppetConfig(project string, trustCache bool, stderr io.Writer) (c
 	return cfg, o, err
 }
 
-// sessionPuppetClients speaks as the agent session's own puppet (sock-contract
-// ADR 27), as sock-mcp does for that session: sock-client's SessionPuppets,
+// sessionPuppetClients speaks as the agent session's own puppet, as
+// sock-mcp does for that session: sock-client's SessionPuppets,
 // made with the machine key on the session's first send and named name. With
 // setName the puppet is renamed when name changed; a failed rename goes to
 // stderr and the send goes on.

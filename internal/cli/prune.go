@@ -14,7 +14,7 @@ import (
 )
 
 // newPuppetPruneCmd erases the project puppets no machine key can sweep: those
-// a session made, or whose key was revoked (sock-cli-85u). A session cannot
+// a session made, or whose key was revoked. A session cannot
 // see a puppet's creator, so it matches by name and asks.
 func newPuppetPruneCmd(app *App) *cobra.Command {
 	var yes, withTokens bool
