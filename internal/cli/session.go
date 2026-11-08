@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"connectrpc.com/connect"
@@ -15,7 +18,6 @@ import (
 
 	"github.com/aeryx-ai/sock-cli/internal/config"
 	client "github.com/aeryx-ai/sock-client"
-	"github.com/aeryx-ai/sock-client/login"
 )
 
 // The documents the app links in SockKit/Legal.swift, and the terms version
@@ -24,105 +26,69 @@ const (
 	termsURL     = "https://joinsock.com/terms/"
 	privacyURL   = "https://joinsock.com/privacy/"
 	termsVersion = "2026-10-11"
+	inviteURL    = "https://joinsock.com/invite/"
 )
 
 // maxLabel is the device label limit, in characters.
 const maxLabel = 64
 
-// signInFlags are the flags login and register share.
+// handleRE is the hub's handle rule, checked before anything is sent.
+var handleRE = regexp.MustCompile(`^[a-z0-9_]{3,20}$`)
+
+// signInFlags are login's flags: the device, the browser, and what a new
+// person's registration needs when there is no terminal to ask on.
 type signInFlags struct {
 	label     string
 	noBrowser bool
-	port      int
+	handle    string
+	name      string
+	terms     string
+	invite    string
 }
 
 func (f *signInFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.label, "label", "", "device label (default \"sock CLI on <hostname>\")")
-	cmd.Flags().BoolVar(&f.noBrowser, "no-browser", false, "print the sign-in URL instead of opening a browser")
-	cmd.Flags().IntVar(&f.port, "port", 0, "loopback listener port, 1024 to 65535 (default any free port)")
+	cmd.Flags().BoolVar(&f.noBrowser, "no-browser", false, "do not try to open a browser; the page and the code are printed either way")
+	cmd.Flags().StringVar(&f.handle, "handle", "", "when registering: handle, lowercase a-z, 0-9 and _, 3 to 20 characters (prompted for on a terminal)")
+	cmd.Flags().StringVar(&f.name, "name", "", "when registering: display name (prompted for on a terminal)")
+	cmd.Flags().StringVar(&f.terms, "accept-terms", "", "when registering: the terms version you accept, "+termsVersion+" in this build (asked on a terminal)")
+	cmd.Flags().StringVar(&f.invite, "invite", "", "when registering while registration is invite-only: invite code (prompted for on a terminal)")
 }
-
-// signInRPC calls SignInWithApple or RegisterWithApple with what the browser
-// handoff produced.
-type signInRPC func(ctx context.Context, c Clients, r login.Result, label string) (*sockv1.Session, error)
 
 func newLoginCmd(app *App) *cobra.Command {
 	var f signInFlags
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Sign in with Apple in the browser and save a session token",
-		Long: "Sign in as a human with Sign in with Apple. sock opens the hub's sign-in page in your browser and listens on 127.0.0.1 for the result, " +
-			"then writes the session token to the config file. On a remote machine, pass --no-browser and --port, forward the port (ssh -L <port>:127.0.0.1:<port>) and open the URL on your own machine.",
+		Short: "Sign in with a code you confirm in a browser on any device, and save a session token",
+		Long: "Sign in as a human. sock shows a short code and the hub page that takes it, opens your browser to that page when it can, " +
+			"and waits for you to sign in there with Apple, Google or email; the browser can be on any device. " +
+			"The session token goes to the config file, never to the terminal.\n\n" +
+			"A sign-in to an address with no sock account registers one: on a terminal you are asked for a handle, a name and the terms " +
+			"(" + termsURL + ", " + privacyURL + "; this build ships terms version " + termsVersion + "), and for an invite while registration is invite-only; " +
+			"off a terminal pass --handle, --name and --accept-terms, and --invite when required.",
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return app.signIn(cmd, f, func(ctx context.Context, c Clients, r login.Result, label string) (*sockv1.Session, error) {
-				res, err := c.Identity.SignInWithApple(ctx, connect.NewRequest(&sockv1.SignInWithAppleRequest{
-					IdentityToken:     r.IDToken,
-					Nonce:             r.Nonce,
-					DeviceLabel:       label,
-					AuthorizationCode: r.Code,
-					AppleClient:       sockv1.AppleClient_APPLE_CLIENT_WEB,
-				}))
-				if err != nil {
-					return nil, err
-				}
-				return res.Msg.GetSession(), nil
-			})
-		},
+		RunE: func(cmd *cobra.Command, _ []string) error { return app.login(cmd, f) },
 	}
 	f.register(cmd)
 	return cmd
 }
 
-func newRegisterCmd(app *App) *cobra.Command {
-	var f signInFlags
-	var invite, handle, name, terms string
-	cmd := &cobra.Command{
-		Use:   "register",
-		Short: "Create a sock account with Sign in with Apple and save a session token",
-		Long: "Create a human account, then sign in as login does.\n\n" +
-			"--accept-terms says you agree to the terms of service " + termsURL + " and the privacy policy " + privacyURL +
-			". This build ships terms version " + termsVersion + ".\n\n" +
-			"--invite is required unless the server waives it for your Apple ID.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			h := strings.TrimPrefix(handle, "@")
-			err := app.signIn(cmd, f, func(ctx context.Context, c Clients, r login.Result, label string) (*sockv1.Session, error) {
-				res, err := c.Identity.RegisterWithApple(ctx, connect.NewRequest(&sockv1.RegisterWithAppleRequest{
-					IdentityToken:        r.IDToken,
-					Nonce:                r.Nonce,
-					DeviceLabel:          label,
-					InviteCode:           invite,
-					Handle:               h,
-					DisplayName:          name,
-					AuthorizationCode:    r.Code,
-					AcceptedTermsVersion: terms,
-					AppleClient:          sockv1.AppleClient_APPLE_CLIENT_WEB,
-				}))
-				if err != nil {
-					return nil, err
-				}
-				return res.Msg.GetSession(), nil
-			})
-			if client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_TERMS_NOT_ACCEPTED {
-				return &rewritten{fmt.Sprintf("terms version %s is not the server's current one; update sock, then read the terms again at %s", terms, termsURL), err}
-			}
-			return err
+// newRegisterCmd is the removed command, kept only to say where it went.
+func newRegisterCmd(*App) *cobra.Command {
+	return &cobra.Command{
+		Use:                "register",
+		Short:              "Removed: sock login creates an account when you have none",
+		Hidden:             true,
+		DisableFlagParsing: true,
+		RunE: func(*cobra.Command, []string) error {
+			return errors.New("sock register is gone: sock login creates an account when you have none")
 		},
 	}
-	f.register(cmd)
-	cmd.Flags().StringVar(&invite, "invite", "", "invite code")
-	cmd.Flags().StringVar(&handle, "handle", "", "handle, lowercase a-z, 0-9 and _, 3 to 20 characters (required)")
-	cmd.Flags().StringVar(&name, "name", "", "display name (required)")
-	cmd.Flags().StringVar(&terms, "accept-terms", "", "the terms version you accept, "+termsVersion+" in this build (required)")
-	for _, req := range []string{"handle", "name", "accept-terms"} {
-		_ = cmd.MarkFlagRequired(req) // the flag exists: registered above
-	}
-	return cmd
 }
 
-// signIn runs the browser handoff, then rpc, then writes the session token.
-func (a *App) signIn(cmd *cobra.Command, f signInFlags, rpc signInRPC) error {
+// login runs the terminal sign-in (sock-contract ADR 52), registers a new
+// person with the ticket it may answer, then writes the session token.
+func (a *App) login(cmd *cobra.Command, f signInFlags) error {
 	cfg, err := a.load(true)
 	if err != nil {
 		return err
@@ -148,23 +114,26 @@ func (a *App) signIn(cmd *cobra.Command, f signInFlags, rpc signInRPC) error {
 	if a.Getenv("SOCK_TOKEN") != "" {
 		warn(stderr, "SOCK_TOKEN is set and overrides the token sock login saves; unset it to use the new session")
 	}
-	res, err := login.Run(cmd.Context(), login.Options{
-		Hub:      cfg.URL,
-		Port:     f.port,
-		Timeout:  a.LoginTimeout,
-		Show:     a.showLoginURL(stderr, f.noBrowser),
-		Received: func() { warn(stderr, "sign-in received") },
-	})
+	cfg.Token = "" // sign-in is anonymous: never send another token along
+	c := newClients(cfg, a.userAgent())
+	ctx := cmd.Context()
+	start, err := unary(ctx, a, c.Identity.StartTerminalSignIn, &sockv1.StartTerminalSignInRequest{DeviceLabel: label})
 	if err != nil {
 		return err
 	}
-	cfg.Token = "" // sign-in is anonymous: never send another token along
-	c := newClients(cfg, a.userAgent())
-	session, err := call(cmd.Context(), a, func(ctx context.Context) (*sockv1.Session, error) {
-		return rpc(ctx, c, res, label)
-	})
+	if err := a.showCode(stderr, f.noBrowser, start); err != nil {
+		return err
+	}
+	res, err := a.waitForBrowser(ctx, c, start)
 	if err != nil {
 		return err
+	}
+	warn(stderr, "sign-in received")
+	session := res.GetSession()
+	if r := res.GetRegistration(); r != nil {
+		if session, err = a.registerNew(cmd, c, f, label, r.GetRegistrationTicket()); err != nil {
+			return err
+		}
 	}
 	if !strings.HasPrefix(session.GetToken(), humanTokenPrefix) {
 		return errors.New("the server returned no session token")
@@ -181,6 +150,184 @@ func (a *App) signIn(cmd *cobra.Command, f signInFlags, rpc signInRPC) error {
 		return a.printer().json(cmd.OutOrStdout(), session)
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "signed in as @%s on device %s\n", line(session.GetAccount().GetHuman().GetHandle()), line(session.GetDevice().GetId()))
+	return err
+}
+
+// waitForBrowser polls FinishTerminalSignIn at the interval the hub names
+// until a browser has finished, the sign-in expires or LoginTimeout passes.
+// The first poll waits a full interval: Start counted as one.
+func (a *App) waitForBrowser(ctx context.Context, c Clients, start *sockv1.StartTerminalSignInResponse) (*sockv1.FinishTerminalSignInResponse, error) {
+	timeout := a.LoginTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	deadline := time.Now().Add(timeout)
+	if exp := start.GetExpiresAt(); exp != nil && exp.AsTime().Before(deadline) {
+		deadline = exp.AsTime()
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	wait := start.GetPollInterval().AsDuration()
+	if wait <= 0 {
+		wait = 5 * time.Second
+	}
+	timedOut := errors.New("sign-in timed out; run sock login again")
+	for {
+		if err := a.Sleep(ctx, wait); err != nil {
+			return nil, timedOut
+		}
+		res, err := unary(ctx, a, c.Identity.FinishTerminalSignIn, &sockv1.FinishTerminalSignInRequest{TerminalSignIn: start.GetTerminalSignIn()})
+		switch r := client.Reason(err); {
+		case ctx.Err() != nil:
+			return nil, timedOut
+		case r == sockv1.ErrorReason_ERROR_REASON_RATE_LIMITED:
+			if after, ok := client.RetryAfter(err, time.Now()); ok && after > 0 {
+				wait = after
+			}
+			continue
+		case err != nil:
+			return nil, err
+		}
+		if p := res.GetPending(); p != nil {
+			if d := p.GetRetryAfter().AsDuration(); d > 0 {
+				wait = d
+			}
+			continue
+		}
+		return res, nil
+	}
+}
+
+// registerNew is the new person's registration with the ticket the sign-in
+// answered: a handle, a name, the terms and, while registration is
+// invite-only, an invite, each from its flag or asked for on a terminal.
+func (a *App) registerNew(cmd *cobra.Command, c Clients, f signInFlags, label, ticket string) (*sockv1.Session, error) {
+	stderr := cmd.ErrOrStderr()
+	warn(stderr, "No sock account for this address yet. Let's make one.")
+	ctx := cmd.Context()
+	policy, err := unary(ctx, a, c.Identity.GetRegistrationPolicy, &sockv1.GetRegistrationPolicyRequest{})
+	if err != nil {
+		return nil, err
+	}
+	tty := a.StdinIsTTY()
+	// one reader for every prompt: a fresh bufio.Reader per question would
+	// drop the lines already buffered
+	in := bufio.NewReader(cmd.InOrStdin())
+	ask := func(prompt string) (string, error) {
+		if _, err := fmt.Fprint(stderr, line(prompt)); err != nil {
+			return "", err
+		}
+		answer, err := in.ReadString('\n')
+		if err != nil && answer == "" {
+			return "", fmt.Errorf("read answer: %w", err)
+		}
+		return strings.TrimSpace(answer), nil
+	}
+	missing := func(what string) error {
+		need := "--handle, --name and --accept-terms"
+		if policy.GetInviteRequired() {
+			need += " (and --invite)"
+		}
+		return fmt.Errorf("registration needs %s: run sock login on a terminal, or pass %s", what, need)
+	}
+	handle := strings.TrimPrefix(f.handle, "@")
+	for handle == "" || !handleRE.MatchString(handle) {
+		if handle != "" {
+			warn(stderr, "a handle is 3 to 20 of lowercase a-z, 0-9 and _")
+		}
+		if !tty {
+			return nil, missing("a handle")
+		}
+		if handle, err = ask("Handle (3 to 20 of a-z, 0-9, _): @"); err != nil {
+			return nil, err
+		}
+		handle = strings.TrimPrefix(handle, "@")
+	}
+	name := strings.TrimSpace(f.name)
+	for name == "" || utf8.RuneCountInString(name) > maxLabel {
+		if name != "" {
+			warnf(stderr, "a display name is 1 to %d characters", maxLabel)
+		}
+		if !tty {
+			return nil, missing("a display name")
+		}
+		if name, err = ask("Display name: "); err != nil {
+			return nil, err
+		}
+		name = strings.TrimSpace(name)
+	}
+	invite := f.invite
+	if policy.GetInviteRequired() && invite == "" {
+		if !tty {
+			return nil, missing("an invite")
+		}
+		warn(stderr, "Registration needs an invite; request one at "+inviteURL)
+		if invite, err = ask("Invite code: "); err != nil {
+			return nil, err
+		}
+	}
+	terms := f.terms
+	if terms == "" {
+		if !tty {
+			return nil, missing("the terms accepted")
+		}
+		warnf(stderr, "Terms of service: %s\nPrivacy policy: %s\nThis build ships terms version %s.", termsURL, privacyURL, termsVersion)
+		yes, err := ask("Type yes to accept them: ")
+		if err != nil {
+			return nil, err
+		}
+		if yes != "yes" {
+			return nil, errors.New("not registered")
+		}
+		terms = termsVersion
+	}
+	for attempt := range 2 {
+		res, err := unary(ctx, a, c.Identity.RegisterWithEmail, &sockv1.RegisterWithEmailRequest{
+			RegistrationTicket: ticket, DeviceLabel: label, InviteCode: invite, Handle: handle, DisplayName: name, AcceptedTermsVersion: terms,
+		})
+		r := client.Reason(err)
+		switch {
+		case err == nil:
+			return res.GetSession(), nil
+		case r == sockv1.ErrorReason_ERROR_REASON_TERMS_NOT_ACCEPTED:
+			return nil, &rewritten{fmt.Sprintf("terms version %s is not the server's current one; update sock, then read the terms again at %s", terms, termsURL), err}
+		case r == sockv1.ErrorReason_ERROR_REASON_REGISTRATION_TICKET_INVALID:
+			return nil, &rewritten{"the sign-in expired before registration finished; run sock login again", err}
+		case attempt == 0 && tty && r == sockv1.ErrorReason_ERROR_REASON_HANDLE_TAKEN:
+			warnf(stderr, "@%s is taken", handle)
+			if handle, err = ask("Another handle: @"); err != nil {
+				return nil, err
+			}
+			handle = strings.TrimPrefix(handle, "@")
+		case attempt == 0 && tty && r == sockv1.ErrorReason_ERROR_REASON_INVITE_INVALID:
+			warn(stderr, "that invite is not valid")
+			if invite, err = ask("Invite code: "); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, err
+		}
+	}
+	return nil, errors.New("not registered")
+}
+
+// showCode tells the person where to sign in: the page, the code, and
+// whether a browser was opened to the page with the code filled in. The
+// page and the code are always printed, since the browser may be on
+// another device.
+func (a *App) showCode(stderr io.Writer, noBrowser bool, start *sockv1.StartTerminalSignInResponse) error {
+	if _, err := fmt.Fprintf(stderr, "To sign in, open this page on any device and enter the code:\n\n  %s\n\n  %s\n\n", line(start.GetVerificationUrl()), line(start.GetUserCode())); err != nil {
+		return err
+	}
+	how := "Open it on any device; waiting for you to finish."
+	if !noBrowser {
+		if err := a.OpenBrowser(start.GetVerificationUrlComplete()); err == nil {
+			how = "Opened your browser to that page with the code filled in; waiting for you to finish."
+		} else {
+			warnf(stderr, "could not open a browser: %v", err)
+		}
+	}
+	_, err := fmt.Fprintln(stderr, how)
 	return err
 }
 
@@ -245,24 +392,6 @@ func (a *App) host() string {
 		return "unknown host"
 	}
 	return host
-}
-
-// showLoginURL opens the browser, or prints the URL when asked to or when
-// no browser opens. The URL is printed only then: it carries the state, and
-// anyone who reads it can finish a login into their own account.
-func (a *App) showLoginURL(stderr io.Writer, noBrowser bool) func(string) error {
-	return func(u string) error {
-		if !noBrowser {
-			err := a.OpenBrowser(u)
-			if err == nil {
-				_, err := fmt.Fprintln(stderr, "Opened your browser to sign in with Apple; waiting for it to finish.")
-				return err
-			}
-			warnf(stderr, "could not open a browser: %v", err)
-		}
-		_, err := fmt.Fprintf(stderr, "Open this URL in a browser on this computer to sign in with Apple:\n\n  %s\n\n", line(u))
-		return err
-	}
 }
 
 // warn writes a diagnostic line. A failing stderr has no recovery path.

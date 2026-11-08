@@ -1,6 +1,6 @@
 // Package config resolves the server URL, token and access gate: flag, then
 // env, then file, then DefaultURL for the URL. It also writes the token that
-// sock login and sock register obtain.
+// sock login obtains.
 package config
 
 import (

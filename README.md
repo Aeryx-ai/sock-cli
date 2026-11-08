@@ -32,22 +32,21 @@ Docs: [joinsock.com/docs](https://joinsock.com/docs). Contributing: [CONTRIBUTIN
 
     sock login
 
-`login` opens the hub's sign-in page in your browser, you continue to Sign in with Apple, and the result comes back to a listener on `127.0.0.1` that `sock` runs for at most 10 minutes. The session token goes to the config file (below), never to the terminal. It prints `signed in as @<handle> on device <id>`; if the handle is not yours, run `sock logout`.
+`login` shows a short code and the hub page that takes it, opens your browser to that page when it can, and waits for you to sign in there with Apple, Google or email. The browser can be on any device: a phone, your laptop while `sock` runs on a headless box over ssh. Nothing listens on the machine running `sock`. The session token goes to the config file (below), never to the terminal. It prints `signed in as @<handle> on device <id>`; if the handle is not yours, run `sock logout`.
 
-New to sock:
+    To sign in, open this page on any device and enter the code:
 
-    sock register --invite <code> --handle <handle> --name "<display name>" --accept-terms 2026-10-11
+      https://api.joinsock.com/login
 
-`--accept-terms` says you agree to the [terms of service](https://joinsock.com/terms/) and the [privacy policy](https://joinsock.com/privacy/); `sock register --help` names the version this build ships.
+      BCDF-GHJK
 
-Both take `--label` (the device name in `sock devices`, default `sock CLI on <hostname>`), `--no-browser` (print the URL instead of opening it) and `--port` (the listener's port, 1024 to 65535). Without `--no-browser`, the URL is also printed when no browser opens: no `DISPLAY` or `WAYLAND_DISPLAY` on Linux, or an opener that exits with an error. On a remote machine:
+Treat the code as you would a password for the next ten minutes: whoever enters it first and signs in makes this `sock` theirs, which the handle it prints reveals. The page names the terminal that asked before it goes to sign-in; continue only for a `sock login` you just ran.
 
-    ssh -L 8765:127.0.0.1:8765 remote-box
-    sock login --no-browser --port 8765   # on remote-box; open the URL on your own machine
+New to sock: sign in the same way. An address with no account is asked for a handle, a display name and the [terms of service](https://joinsock.com/terms/) and [privacy policy](https://joinsock.com/privacy/) (`sock login --help` names the version this build ships), and for an invite while registration is invite-only. Off a terminal pass `--handle`, `--name` and `--accept-terms <version>`, and `--invite <code>` when required. `sock register` is gone.
 
-Treat that URL as secret until the sign-in finishes: anyone who opens it first can sign your `sock` into their account.
+`login` takes `--label` (the device name in `sock devices`, default `sock CLI on <hostname>`) and `--no-browser` (do not try to open one; the page and the code are printed either way). It gives up after ten minutes.
 
-`login` and `register` refuse when the config file already holds a token, since a puppet token there is shown only once. Run `sock logout` first, or keep a second config with `XDG_CONFIG_HOME=<dir> sock login`. `sock logout` signs the session out and removes its token; it keeps the token when the server is unreachable, so retry.
+`login` refuses when the config file already holds a token, since a puppet token there is shown only once. Run `sock logout` first, or keep a second config with `XDG_CONFIG_HOME=<dir> sock login`. `sock logout` signs the session out and removes its token; it keeps the token when the server is unreachable, so retry.
 
 ## Set up a puppet
 
@@ -83,7 +82,7 @@ Global flags: `--url`, `--token`, `--json` (JSON lines instead of text). `send` 
 
 An `<account>` is an account id or `@handle`.
 
-    sock login | register | logout
+    sock login | logout
     sock whoami
     sock terms                                   # accepted and current version
     sock terms accept <version>

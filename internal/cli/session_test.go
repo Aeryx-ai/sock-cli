@@ -1,13 +1,9 @@
 package cli
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +13,7 @@ import (
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 
@@ -52,36 +49,18 @@ func humanApp(t *testing.T, srv *socktest.Server, env map[string]string) *App {
 	}
 }
 
-// browser plays the person's browser, the hub's interstitial and Apple: it
-// takes the login URL and delivers the relayed callback to the listener.
+// browser records what login opened: the hub's page with the code filled
+// in. Nothing happens in it; the fake hub answers the terminal directly.
 type browser struct {
-	t        *testing.T
-	hub      string
-	opened   int
-	nonceSum string
+	t      *testing.T
+	hub    string
+	opened []string
 }
 
 func (b *browser) open(raw string) error {
-	b.opened++
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme+"://"+u.Host+u.Path != b.hub+"/apple/cli-login" {
-		b.t.Errorf("login URL %q is not the hub's /apple/cli-login", raw)
-		return errors.New("bad URL")
-	}
-	q := u.Query()
-	b.nonceSum = q.Get("nonce")
-	state := q.Get("state")
-	port, _, _ := strings.Cut(state, ".")
-	relay := fmt.Sprintf("http://127.0.0.1:%s/callback?%s", port, url.Values{"state": {state}, "code": {"code-1"}, "id_token": {"h.p.s"}}.Encode())
-	res, err := http.Get(relay) // follows the 303 to /done
-	if err != nil {
-		b.t.Errorf("relay: %v", err)
-		return err
-	}
-	_, _ = io.Copy(io.Discard, res.Body)
-	_ = res.Body.Close()
-	if res.Request.URL.Path != "/done" || res.StatusCode != http.StatusOK {
-		b.t.Errorf("browser ended at %s with %d", res.Request.URL, res.StatusCode)
+	b.opened = append(b.opened, raw)
+	if raw != b.hub+"/login?code="+socktest.UserCode {
+		b.t.Errorf("opened %q, want the hub's /login with the code", raw)
 	}
 	return nil
 }
@@ -111,60 +90,6 @@ func fileToken(t *testing.T, app *App) string {
 	return tok
 }
 
-func TestLoginWritesSessionToken(t *testing.T) {
-	srv := socktest.New(t)
-	app := humanApp(t, srv, nil)
-	b := withBrowser(t, app, srv)
-	out, errOut, err := run(t, app, nil, "login")
-	if err != nil {
-		t.Fatalf("login: %v, stderr %q", err, errOut)
-	}
-	if out != "signed in as @guy on device "+socktest.HumanDeviceID+"\n" {
-		t.Fatalf("stdout %q", out)
-	}
-	if strings.Contains(out+errOut, socktest.HumanToken) {
-		t.Fatal("session token printed")
-	}
-	if fileToken(t, app) != socktest.HumanToken {
-		t.Fatal("token not written")
-	}
-	fi, err := os.Stat(app.ConfigPath)
-	if err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("config mode %v, %v", fi.Mode(), err)
-	}
-	calls := srv.CallsTo("SignInWithApple")
-	if len(calls) != 1 {
-		t.Fatalf("%d SignInWithApple calls", len(calls))
-	}
-	req := calls[0].Msg.(*sockv1.SignInWithAppleRequest)
-	sum := sha256.Sum256([]byte(req.GetNonce()))
-	if req.GetAppleClient() != sockv1.AppleClient_APPLE_CLIENT_WEB || req.GetAuthorizationCode() != "code-1" ||
-		req.GetIdentityToken() != "h.p.s" || req.GetDeviceLabel() != "sock CLI on box" || hex.EncodeToString(sum[:]) != b.nonceSum {
-		t.Fatalf("request %v (nonce hash in URL %s)", req, b.nonceSum)
-	}
-	if h := calls[0].Header.Get("Authorization"); h != "" {
-		t.Fatalf("anonymous call sent Authorization %q", h)
-	}
-}
-
-func TestLoginKeepsURLAndSendsGate(t *testing.T) {
-	srv := socktest.New(t)
-	app := humanApp(t, srv, nil)
-	app.Getenv = func(k string) string { return map[string]string{"SOCK_ACCESS_GATE": "gate-1"}[k] }
-	writeConfig(t, app, fmt.Sprintf("url = %q\n", srv.URL))
-	withBrowser(t, app, srv)
-	if _, errOut, err := run(t, app, nil, "login"); err != nil {
-		t.Fatalf("login: %v %s", err, errOut)
-	}
-	cfg, err := config.Load(config.Sources{Getenv: func(string) string { return "" }, Path: app.ConfigPath})
-	if err != nil || cfg.URL != srv.URL || cfg.Token != socktest.HumanToken {
-		t.Fatalf("config %+v, %v", cfg, err)
-	}
-	if g := srv.CallsTo("SignInWithApple")[0].Header.Get("Sock-Access-Gate"); g != "gate-1" {
-		t.Fatalf("gate %q", g)
-	}
-}
-
 func TestLoginRefusesExistingToken(t *testing.T) {
 	srv := socktest.New(t)
 	app := humanApp(t, srv, nil)
@@ -173,7 +98,7 @@ func TestLoginRefusesExistingToken(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "already holds a token") {
 		t.Fatalf("got %v", err)
 	}
-	if fileToken(t, app) != "sock_pt_keepme_secret" || len(srv.CallsTo("SignInWithApple")) != 0 {
+	if fileToken(t, app) != "sock_pt_keepme_secret" || len(srv.CallsTo("StartTerminalSignIn")) != 0 {
 		t.Fatal("existing token touched")
 	}
 }
@@ -186,71 +111,10 @@ func TestLoginWarnsWhenEnvTokenSet(t *testing.T) {
 	if err != nil || !strings.Contains(errOut, "SOCK_TOKEN") {
 		t.Fatalf("err %v, stderr %q", err, errOut)
 	}
-	if h := srv.CallsTo("SignInWithApple")[0].Header.Get("Authorization"); h != "" {
-		t.Fatalf("SOCK_TOKEN sent on sign-in: %q", h)
-	}
-}
-
-func TestLoginNoBrowserPrintsURL(t *testing.T) {
-	srv := socktest.New(t)
-	app := humanApp(t, srv, nil)
-	b := &browser{t: t, hub: srv.URL}
-	errOut := &syncBuffer{}
-	done := make(chan error, 1)
-	go func() {
-		root := NewRoot(app)
-		root.SetArgs([]string{"login", "--no-browser"})
-		root.SetIn(strings.NewReader(""))
-		root.SetOut(io.Discard)
-		root.SetErr(errOut)
-		done <- root.Execute()
-	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(errOut.String(), "/apple/cli-login?") {
-		if time.Now().After(deadline) {
-			t.Fatalf("no URL printed: %q", errOut.String())
+	for _, m := range []string{"StartTerminalSignIn", "FinishTerminalSignIn"} {
+		if h := srv.CallsTo(m)[0].Header.Get("Authorization"); h != "" {
+			t.Fatalf("SOCK_TOKEN sent on %s: %q", m, h)
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	var raw string
-	for _, f := range strings.Fields(errOut.String()) {
-		if strings.Contains(f, "/apple/cli-login?") {
-			raw = f
-		}
-	}
-	if err := b.open(raw); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("login: %v", err)
-	}
-	if fileToken(t, app) != socktest.HumanToken {
-		t.Fatal("token not written")
-	}
-}
-
-func TestLoginBrowserFailurePrintsURL(t *testing.T) {
-	srv := socktest.New(t)
-	app := humanApp(t, srv, nil)
-	app.LoginTimeout = 100 * time.Millisecond
-	app.OpenBrowser = func(string) error { return errors.New("no display") }
-	_, errOut, err := run(t, app, nil, "login")
-	if err == nil || !strings.Contains(errOut, "/apple/cli-login?") {
-		t.Fatalf("err %v, stderr %q", err, errOut)
-	}
-}
-
-func TestLoginNotRegistered(t *testing.T) {
-	srv := socktest.New(t)
-	srv.Fail = map[string]error{"SignInWithApple": socktest.Error(connect.CodeNotFound, sockv1.ErrorReason_ERROR_REASON_NOT_REGISTERED)}
-	app := humanApp(t, srv, nil)
-	withBrowser(t, app, srv)
-	_, _, err := run(t, app, nil, "login")
-	if err == nil || !strings.Contains(err.Error(), "run sock register with an invite") {
-		t.Fatalf("got %v", err)
-	}
-	if fileToken(t, app) != "" {
-		t.Fatal("token written after a refusal")
 	}
 }
 
@@ -265,107 +129,6 @@ func TestLoginJSONClearsToken(t *testing.T) {
 	var s sockv1.Session
 	if err := protojson.Unmarshal([]byte(out), &s); err != nil || s.GetToken() != "" || s.GetDevice().GetId() != socktest.HumanDeviceID {
 		t.Fatalf("json %q: %v", out, err)
-	}
-}
-
-func TestLoginLabel(t *testing.T) {
-	srv := socktest.New(t)
-	app := humanApp(t, srv, nil)
-	app.Hostname = func() (string, error) { return strings.Repeat("é", 80), nil }
-	withBrowser(t, app, srv)
-	if _, _, err := run(t, app, nil, "login"); err != nil {
-		t.Fatal(err)
-	}
-	label := srv.CallsTo("SignInWithApple")[0].Msg.(*sockv1.SignInWithAppleRequest).GetDeviceLabel()
-	if utf8.RuneCountInString(label) != 64 || !strings.HasPrefix(label, "sock CLI on é") {
-		t.Fatalf("default label %q", label)
-	}
-
-	app = humanApp(t, srv, nil)
-	withBrowser(t, app, srv)
-	if _, _, err := run(t, app, nil, "login", "--label", "work laptop"); err != nil {
-		t.Fatal(err)
-	}
-	if got := srv.CallsTo("SignInWithApple")[1].Msg.(*sockv1.SignInWithAppleRequest).GetDeviceLabel(); got != "work laptop" {
-		t.Fatalf("label %q", got)
-	}
-	app = humanApp(t, srv, nil)
-	if _, _, err := run(t, app, nil, "login", "--label", strings.Repeat("x", 65)); err == nil {
-		t.Fatal("65-character label accepted")
-	}
-}
-
-func TestLoginPortChecked(t *testing.T) {
-	srv := socktest.New(t)
-	_, _, err := run(t, humanApp(t, srv, nil), nil, "login", "--port", "80")
-	if err == nil || !strings.Contains(err.Error(), "1024 to 65535") {
-		t.Fatalf("got %v", err)
-	}
-}
-
-func TestRegister(t *testing.T) {
-	srv := socktest.New(t)
-	app := humanApp(t, srv, nil)
-	withBrowser(t, app, srv)
-	out, errOut, err := run(t, app, nil, "register", "--invite", "inv-1", "--handle", "@guy", "--name", "Guy G", "--accept-terms", "2026-10-11")
-	if err != nil {
-		t.Fatalf("register: %v %s", err, errOut)
-	}
-	if out != "signed in as @guy on device "+socktest.HumanDeviceID+"\n" || fileToken(t, app) != socktest.HumanToken {
-		t.Fatalf("stdout %q", out)
-	}
-	req := srv.CallsTo("RegisterWithApple")[0].Msg.(*sockv1.RegisterWithAppleRequest)
-	if req.GetInviteCode() != "inv-1" || req.GetHandle() != "guy" || req.GetDisplayName() != "Guy G" || req.GetAcceptedTermsVersion() != "2026-10-11" ||
-		req.GetAppleClient() != sockv1.AppleClient_APPLE_CLIENT_WEB || req.GetAuthorizationCode() != "code-1" || req.GetNonce() == "" {
-		t.Fatalf("request %v", req)
-	}
-}
-
-func TestRegisterWithoutInvite(t *testing.T) {
-	srv := socktest.New(t)
-	app := humanApp(t, srv, nil)
-	withBrowser(t, app, srv)
-	if _, _, err := run(t, app, nil, "register", "--handle", "guy", "--name", "Guy", "--accept-terms", "2026-10-11"); err != nil {
-		t.Fatal(err)
-	}
-	if inv := srv.CallsTo("RegisterWithApple")[0].Msg.(*sockv1.RegisterWithAppleRequest).GetInviteCode(); inv != "" {
-		t.Fatalf("invite %q", inv)
-	}
-}
-
-func TestRegisterNeedsTermsHandleAndName(t *testing.T) {
-	srv := socktest.New(t)
-	for _, args := range [][]string{
-		{"register", "--handle", "guy", "--name", "Guy"},
-		{"register", "--name", "Guy", "--accept-terms", "v"},
-		{"register", "--handle", "guy", "--accept-terms", "v"},
-	} {
-		if _, _, err := run(t, humanApp(t, srv, nil), nil, args...); err == nil {
-			t.Fatalf("%v accepted", args)
-		}
-	}
-}
-
-func TestRegisterHelpNamesTerms(t *testing.T) {
-	out, _, err := run(t, DefaultApp("test"), nil, "register", "--help")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"https://joinsock.com/terms/", "https://joinsock.com/privacy/", "2026-10-11"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("help lacks %s:\n%s", want, out)
-		}
-	}
-}
-
-func TestRegisterStaleTerms(t *testing.T) {
-	srv := socktest.New(t)
-	srv.Fail = map[string]error{"RegisterWithApple": socktest.Error(connect.CodeFailedPrecondition, sockv1.ErrorReason_ERROR_REASON_TERMS_NOT_ACCEPTED)}
-	app := humanApp(t, srv, nil)
-	withBrowser(t, app, srv)
-	_, _, err := run(t, app, nil, "register", "--handle", "guy", "--name", "Guy", "--accept-terms", "2020-01-01")
-	if err == nil || !strings.Contains(err.Error(), "update sock") {
-		t.Fatalf("got %v", err)
 	}
 }
 
@@ -531,5 +294,318 @@ func TestLoginSurvivesAMachineKeyFailure(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "sock machine-key create") {
 		t.Fatalf("stderr %q does not say how to finish", errOut)
+	}
+}
+
+func TestLoginWritesSessionToken(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	b := withBrowser(t, app, srv)
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil {
+		t.Fatalf("login: %v, stderr %q", err, errOut)
+	}
+	if out != "signed in as @guy on device "+socktest.HumanDeviceID+"\n" {
+		t.Fatalf("stdout %q", out)
+	}
+	if strings.Contains(out+errOut, socktest.HumanToken) || strings.Contains(out+errOut, socktest.TerminalToken) {
+		t.Fatal("a token was printed")
+	}
+	for _, want := range []string{srv.URL + "/login", socktest.UserCode, "Opened your browser", "sign-in received"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr %q lacks %q", errOut, want)
+		}
+	}
+	if len(b.opened) != 1 {
+		t.Fatalf("browser opened %d times", len(b.opened))
+	}
+	if fileToken(t, app) != socktest.HumanToken {
+		t.Fatal("token not written")
+	}
+	fi, err := os.Stat(app.ConfigPath)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("config mode %v, %v", fi.Mode(), err)
+	}
+	starts := srv.CallsTo("StartTerminalSignIn")
+	if len(starts) != 1 || starts[0].Msg.(*sockv1.StartTerminalSignInRequest).GetDeviceLabel() != "sock CLI on box" || starts[0].Header.Get("Authorization") != "" {
+		t.Fatalf("start calls %v", starts)
+	}
+	finishes := srv.CallsTo("FinishTerminalSignIn")
+	if len(finishes) != 1 || finishes[0].Msg.(*sockv1.FinishTerminalSignInRequest).GetTerminalSignIn() != socktest.TerminalToken || finishes[0].Header.Get("Authorization") != "" {
+		t.Fatalf("finish calls %v", finishes)
+	}
+	if len(srv.CallsTo("RegisterWithEmail")) != 0 {
+		t.Fatal("registered a person who has an account")
+	}
+}
+
+func TestLoginKeepsURLAndSendsGate(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	app.Getenv = func(k string) string { return map[string]string{"SOCK_ACCESS_GATE": "gate-1"}[k] }
+	writeConfig(t, app, fmt.Sprintf("url = %q\n", srv.URL))
+	withBrowser(t, app, srv)
+	if _, errOut, err := run(t, app, nil, "login"); err != nil {
+		t.Fatalf("login: %v %s", err, errOut)
+	}
+	cfg, err := config.Load(config.Sources{Getenv: func(string) string { return "" }, Path: app.ConfigPath})
+	if err != nil || cfg.URL != srv.URL || cfg.Token != socktest.HumanToken {
+		t.Fatalf("config %+v, %v", cfg, err)
+	}
+	for _, m := range []string{"StartTerminalSignIn", "FinishTerminalSignIn"} {
+		if g := srv.CallsTo(m)[0].Header.Get("Sock-Access-Gate"); g != "gate-1" {
+			t.Fatalf("%s gate %q", m, g)
+		}
+	}
+}
+
+// The browser may be on another device: the page and the code are printed
+// whether or not one opens here.
+func TestLoginAlwaysPrintsThePageAndTheCode(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil) // its OpenBrowser fails the test
+	_, errOut, err := run(t, app, nil, "login", "--no-browser")
+	if err != nil || !strings.Contains(errOut, srv.URL+"/login") || !strings.Contains(errOut, socktest.UserCode) || !strings.Contains(errOut, "Open it on any device") {
+		t.Fatalf("no-browser: %v %q", err, errOut)
+	}
+
+	app = humanApp(t, srv, nil)
+	app.OpenBrowser = func(string) error { return errors.New("no display") }
+	_, errOut, err = run(t, app, nil, "login")
+	if err != nil || !strings.Contains(errOut, "could not open a browser: no display") || !strings.Contains(errOut, socktest.UserCode) || !strings.Contains(errOut, "Open it on any device") {
+		t.Fatalf("browser failure: %v %q", err, errOut)
+	}
+}
+
+func pending(d time.Duration) *sockv1.FinishTerminalSignInResponse {
+	return &sockv1.FinishTerminalSignInResponse{Result: &sockv1.FinishTerminalSignInResponse_Pending{Pending: &sockv1.TerminalSignInPending{RetryAfter: durationpb.New(d)}}}
+}
+
+const ticket = "sock_rg_ticket"
+
+func registration() *sockv1.FinishTerminalSignInResponse {
+	return &sockv1.FinishTerminalSignInResponse{Result: &sockv1.FinishTerminalSignInResponse_Registration{Registration: &sockv1.RegistrationTicket{RegistrationTicket: ticket}}}
+}
+
+// login waits a full interval before its first poll (Start counted as one)
+// and then as long as each pending answer says.
+func TestLoginWaitsWhilePending(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Finishes = []*sockv1.FinishTerminalSignInResponse{pending(2 * time.Second), pending(3 * time.Second)}
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	var slept []time.Duration
+	app.Sleep = func(_ context.Context, d time.Duration) error { slept = append(slept, d); return nil }
+	if _, errOut, err := run(t, app, nil, "login"); err != nil {
+		t.Fatalf("login: %v %q", err, errOut)
+	}
+	if len(srv.CallsTo("FinishTerminalSignIn")) != 3 {
+		t.Fatalf("%d polls", len(srv.CallsTo("FinishTerminalSignIn")))
+	}
+	if want := []time.Duration{5 * time.Second, 2 * time.Second, 3 * time.Second}; fmt.Sprint(slept) != fmt.Sprint(want) {
+		t.Fatalf("slept %v, want %v", slept, want)
+	}
+}
+
+func TestLoginGivesUpAtItsTimeout(t *testing.T) {
+	srv := socktest.New(t)
+	for range 10000 {
+		srv.Finishes = append(srv.Finishes, pending(time.Millisecond))
+	}
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	app.LoginTimeout = 50 * time.Millisecond
+	app.Sleep = func(ctx context.Context, d time.Duration) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(d):
+			return nil
+		}
+	}
+	_, _, err := run(t, app, nil, "login")
+	if err == nil || !strings.Contains(err.Error(), "sign-in timed out; run sock login again") {
+		t.Fatalf("got %v", err)
+	}
+	if fileToken(t, app) != "" {
+		t.Fatal("token written after a timeout")
+	}
+}
+
+func TestLoginRefusals(t *testing.T) {
+	for reason, want := range map[sockv1.ErrorReason]string{
+		sockv1.ErrorReason_ERROR_REASON_NOT_REGISTERED:           "no sock account for that sign-in",
+		sockv1.ErrorReason_ERROR_REASON_EMAIL_CODE_INVALID:       "no sock account for that sign-in",
+		sockv1.ErrorReason_ERROR_REASON_TERMINAL_SIGN_IN_INVALID: "run sock login again",
+	} {
+		srv := socktest.New(t)
+		srv.Fail = map[string]error{"FinishTerminalSignIn": socktest.Error(connect.CodeUnauthenticated, reason)}
+		app := humanApp(t, srv, nil)
+		withBrowser(t, app, srv)
+		_, _, err := run(t, app, nil, "login")
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: got %v", reason, err)
+		}
+		if fileToken(t, app) != "" {
+			t.Errorf("%s: token written after a refusal", reason)
+		}
+	}
+}
+
+func TestLoginLabel(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	app.Hostname = func() (string, error) { return strings.Repeat("é", 80), nil }
+	withBrowser(t, app, srv)
+	if _, _, err := run(t, app, nil, "login"); err != nil {
+		t.Fatal(err)
+	}
+	label := srv.CallsTo("StartTerminalSignIn")[0].Msg.(*sockv1.StartTerminalSignInRequest).GetDeviceLabel()
+	if utf8.RuneCountInString(label) != 64 || !strings.HasPrefix(label, "sock CLI on é") {
+		t.Fatalf("default label %q", label)
+	}
+
+	app = humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	if _, _, err := run(t, app, nil, "login", "--label", "work laptop"); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.CallsTo("StartTerminalSignIn")[1].Msg.(*sockv1.StartTerminalSignInRequest).GetDeviceLabel(); got != "work laptop" {
+		t.Fatalf("label %q", got)
+	}
+	app = humanApp(t, srv, nil)
+	if _, _, err := run(t, app, nil, "login", "--label", strings.Repeat("x", 65)); err == nil {
+		t.Fatal("65-character label accepted")
+	}
+}
+
+// A sign-in to an address with no account: the ticket registers one, with
+// the flags off a terminal.
+func TestLoginRegistersWithFlags(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Finishes = []*sockv1.FinishTerminalSignInResponse{registration()}
+	srv.InviteRequired = true
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	out, errOut, err := run(t, app, nil, "login", "--invite", "inv-1", "--handle", "@guy", "--name", "Guy G", "--accept-terms", "2026-10-11")
+	if err != nil {
+		t.Fatalf("login: %v %s", err, errOut)
+	}
+	if out != "signed in as @guy on device "+socktest.HumanDeviceID+"\n" || fileToken(t, app) != socktest.HumanToken {
+		t.Fatalf("stdout %q", out)
+	}
+	if !strings.Contains(errOut, "No sock account for this address yet") {
+		t.Fatalf("stderr %q", errOut)
+	}
+	req := srv.CallsTo("RegisterWithEmail")[0].Msg.(*sockv1.RegisterWithEmailRequest)
+	if req.GetRegistrationTicket() != ticket || req.GetInviteCode() != "inv-1" || req.GetHandle() != "guy" || req.GetDisplayName() != "Guy G" ||
+		req.GetAcceptedTermsVersion() != "2026-10-11" || req.GetDeviceLabel() != "sock CLI on box" || req.GetCode() != "" {
+		t.Fatalf("request %v", req)
+	}
+	if len(srv.CallsTo("GetRegistrationPolicy")) != 1 {
+		t.Fatal("policy not read")
+	}
+}
+
+func TestLoginRegistersFromPrompts(t *testing.T) {
+	for _, tc := range []struct {
+		invite            bool
+		stdin, wantInvite string
+	}{
+		{false, "guy\nGuy G\nyes\n", ""},
+		{true, "@guy\nGuy G\ninv-1\nyes\n", "inv-1"},
+	} {
+		srv := socktest.New(t)
+		srv.Finishes = []*sockv1.FinishTerminalSignInResponse{registration()}
+		srv.InviteRequired = tc.invite
+		app := humanApp(t, srv, nil)
+		app.StdinIsTTY = func() bool { return true }
+		withBrowser(t, app, srv)
+		_, errOut, err := run(t, app, strings.NewReader(tc.stdin), "login")
+		if err != nil {
+			t.Fatalf("invite %v: %v %q", tc.invite, err, errOut)
+		}
+		for _, want := range []string{"Handle", "Display name", termsURL, privacyURL, termsVersion} {
+			if !strings.Contains(errOut, want) {
+				t.Errorf("stderr %q lacks %q", errOut, want)
+			}
+		}
+		if strings.Contains(errOut, inviteURL) != tc.invite {
+			t.Errorf("invite %v: stderr %q", tc.invite, errOut)
+		}
+		req := srv.CallsTo("RegisterWithEmail")[0].Msg.(*sockv1.RegisterWithEmailRequest)
+		if req.GetHandle() != "guy" || req.GetDisplayName() != "Guy G" || req.GetInviteCode() != tc.wantInvite || req.GetAcceptedTermsVersion() != termsVersion {
+			t.Fatalf("request %v", req)
+		}
+	}
+}
+
+func TestLoginRegistrationNeedsFlagsOffATerminal(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Finishes = []*sockv1.FinishTerminalSignInResponse{registration()}
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	_, _, err := run(t, app, nil, "login", "--name", "Guy")
+	if err == nil || !strings.Contains(err.Error(), "--handle, --name and --accept-terms") {
+		t.Fatalf("got %v", err)
+	}
+	if len(srv.CallsTo("RegisterWithEmail")) != 0 || fileToken(t, app) != "" {
+		t.Fatal("registered without the flags")
+	}
+	// a bad handle flag is refused before anything is sent
+	srv.Finishes = []*sockv1.FinishTerminalSignInResponse{registration()}
+	_, _, err = run(t, humanApp(t, srv, nil), nil, "login", "--no-browser", "--handle", "Guy!", "--name", "Guy", "--accept-terms", termsVersion)
+	if err == nil || len(srv.CallsTo("RegisterWithEmail")) != 0 {
+		t.Fatalf("bad handle: %v", err)
+	}
+}
+
+func TestLoginRegistrationDeclinedTerms(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Finishes = []*sockv1.FinishTerminalSignInResponse{registration()}
+	app := humanApp(t, srv, nil)
+	app.StdinIsTTY = func() bool { return true }
+	withBrowser(t, app, srv)
+	_, _, err := run(t, app, strings.NewReader("guy\nGuy\nno\n"), "login")
+	if err == nil || err.Error() != "not registered" || len(srv.CallsTo("RegisterWithEmail")) != 0 {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestLoginRegistrationStaleTerms(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Finishes = []*sockv1.FinishTerminalSignInResponse{registration()}
+	srv.Fail = map[string]error{"RegisterWithEmail": socktest.Error(connect.CodeFailedPrecondition, sockv1.ErrorReason_ERROR_REASON_TERMS_NOT_ACCEPTED)}
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	_, _, err := run(t, app, nil, "login", "--handle", "guy", "--name", "Guy", "--accept-terms", "2020-01-01")
+	if err == nil || !strings.Contains(err.Error(), "update sock") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestLoginHelpNamesTerms(t *testing.T) {
+	out, _, err := run(t, DefaultApp("test"), nil, "login", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"https://joinsock.com/terms/", "https://joinsock.com/privacy/", "2026-10-11", "--no-browser"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("help lacks %s:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "--port") {
+		t.Fatal("help still offers --port")
+	}
+}
+
+func TestRegisterIsGone(t *testing.T) {
+	_, _, err := run(t, DefaultApp("test"), nil, "register", "--handle", "guy")
+	if err == nil || !strings.Contains(err.Error(), "sock register is gone") {
+		t.Fatalf("got %v", err)
+	}
+	out, _, _ := run(t, DefaultApp("test"), nil, "--help")
+	if strings.Contains(out, "register") {
+		t.Fatal("register still listed in help")
 	}
 }

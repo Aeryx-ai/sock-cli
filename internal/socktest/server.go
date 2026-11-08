@@ -36,7 +36,7 @@ const HumanDeviceID = "0a0a0a0a-0000-4000-8000-000000000001"
 const HumanToken = "sock_st_" + HumanDeviceID + "_humansecret"
 
 // anonymous are the methods the real server admits without a token.
-var anonymous = map[string]bool{"SignInWithApple": true, "RegisterWithApple": true}
+var anonymous = map[string]bool{"SignInWithApple": true, "RegisterWithApple": true, "StartTerminalSignIn": true, "FinishTerminalSignIn": true, "GetRegistrationPolicy": true, "RegisterWithEmail": true}
 
 // Call is one unary request the fake received.
 type Call struct {
@@ -94,8 +94,13 @@ type Server struct {
 	// Fail makes a method (e.g. "SignInWithApple") return its error every
 	// time, after the call is recorded.
 	Fail map[string]error
-	// Session is what SignInWithApple and RegisterWithApple return.
+	// Session is what the sign-in RPCs return.
 	Session *sockv1.Session
+	// Finishes are FinishTerminalSignIn's answers, front first; with none
+	// left it answers Session.
+	Finishes []*sockv1.FinishTerminalSignInResponse
+	// InviteRequired is GetRegistrationPolicy's answer.
+	InviteRequired bool
 	// AcceptedTerms and CurrentTerms are GetMe's terms versions.
 	AcceptedTerms, CurrentTerms string
 	// Accounts are what GetAccounts and LookupHandle search.

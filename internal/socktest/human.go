@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
@@ -33,6 +34,44 @@ func (s *Server) SignInWithApple(context.Context, *connect.Request[sockv1.SignIn
 // RegisterWithApple implements the generated handler.
 func (s *Server) RegisterWithApple(context.Context, *connect.Request[sockv1.RegisterWithAppleRequest]) (*connect.Response[sockv1.RegisterWithAppleResponse], error) {
 	return ok(&sockv1.RegisterWithAppleResponse{Session: s.session()})
+}
+
+// The terminal sign-in (sock-contract ADR 52).
+const (
+	TerminalToken = "sock_tl_0a0a0a0a-0000-4000-8000-000000000002_" + "dGVybWluYWwtc2VjcmV0LXRlcm1pbmFsLXNlY3JldC0x"
+	UserCode      = "BCDF-GHJK"
+)
+
+// StartTerminalSignIn implements the generated handler.
+func (s *Server) StartTerminalSignIn(context.Context, *connect.Request[sockv1.StartTerminalSignInRequest]) (*connect.Response[sockv1.StartTerminalSignInResponse], error) {
+	page := s.URL + "/login"
+	return ok(&sockv1.StartTerminalSignInResponse{TerminalSignIn: TerminalToken, UserCode: UserCode, VerificationUrl: page, VerificationUrlComplete: page + "?code=" + UserCode,
+		ExpiresAt: timestamppb.New(time.Now().Add(10 * time.Minute)), PollInterval: durationpb.New(5 * time.Second)})
+}
+
+// FinishTerminalSignIn implements the generated handler.
+func (s *Server) FinishTerminalSignIn(context.Context, *connect.Request[sockv1.FinishTerminalSignInRequest]) (*connect.Response[sockv1.FinishTerminalSignInResponse], error) {
+	s.mu.Lock()
+	if len(s.Finishes) > 0 {
+		next := s.Finishes[0]
+		s.Finishes = s.Finishes[1:]
+		s.mu.Unlock()
+		return ok(proto.Clone(next).(*sockv1.FinishTerminalSignInResponse))
+	}
+	s.mu.Unlock()
+	return ok(&sockv1.FinishTerminalSignInResponse{Result: &sockv1.FinishTerminalSignInResponse_Session{Session: s.session()}})
+}
+
+// GetRegistrationPolicy implements the generated handler.
+func (s *Server) GetRegistrationPolicy(context.Context, *connect.Request[sockv1.GetRegistrationPolicyRequest]) (*connect.Response[sockv1.GetRegistrationPolicyResponse], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return ok(&sockv1.GetRegistrationPolicyResponse{InviteRequired: s.InviteRequired})
+}
+
+// RegisterWithEmail implements the generated handler.
+func (s *Server) RegisterWithEmail(context.Context, *connect.Request[sockv1.RegisterWithEmailRequest]) (*connect.Response[sockv1.RegisterWithEmailResponse], error) {
+	return ok(&sockv1.RegisterWithEmailResponse{Session: s.session()})
 }
 
 // SignOut implements the generated handler.
