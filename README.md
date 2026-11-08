@@ -38,7 +38,7 @@ New to sock:
 
 `--accept-terms` says you agree to the [terms of service](https://joinsock.com/terms/) and the [privacy policy](https://joinsock.com/privacy/); `sock register --help` names the version this build ships.
 
-Both take `--label` (the device name in `sock devices`, default `sock CLI on <hostname>`), `--no-browser` (print the URL instead of opening it) and `--port` (the listener's port, 1024 to 65535). On a remote machine:
+Both take `--label` (the device name in `sock devices`, default `sock CLI on <hostname>`), `--no-browser` (print the URL instead of opening it) and `--port` (the listener's port, 1024 to 65535). Without `--no-browser`, the URL is also printed when no browser opens: no `DISPLAY` or `WAYLAND_DISPLAY` on Linux, or an opener that exits with an error. On a remote machine:
 
     ssh -L 8765:127.0.0.1:8765 remote-box
     sock login --no-browser --port 8765   # on remote-box; open the URL on your own machine

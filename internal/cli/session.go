@@ -253,11 +253,12 @@ func (a *App) host() string {
 func (a *App) showLoginURL(stderr io.Writer, noBrowser bool) func(string) error {
 	return func(u string) error {
 		if !noBrowser {
-			if err := a.OpenBrowser(u); err == nil {
+			err := a.OpenBrowser(u)
+			if err == nil {
 				_, err := fmt.Fprintln(stderr, "Opened your browser to sign in with Apple; waiting for it to finish.")
 				return err
 			}
-			warn(stderr, "could not open a browser")
+			warnf(stderr, "could not open a browser: %v", err)
 		}
 		_, err := fmt.Fprintf(stderr, "Open this URL in a browser on this computer to sign in with Apple:\n\n  %s\n\n", line(u))
 		return err
