@@ -9,7 +9,7 @@ require (
 
 require (
 	connectrpc.com/connect v1.21.0
-	github.com/aeryx-ai/sock-client v0.2.0
+	github.com/aeryx-ai/sock-client v0.2.1
 	github.com/aeryx-ai/sock-contract v0.18.0
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
