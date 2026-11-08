@@ -377,6 +377,21 @@ func TestLoginAlwaysPrintsThePageAndTheCode(t *testing.T) {
 	}
 }
 
+// A page the hub names off its own host is printed, never handed to the
+// opener: the opener runs whatever scheme it is given.
+func TestLoginOpensOnlyTheHubsOwnPage(t *testing.T) {
+	var opened []string
+	open := func(u string) error { opened = append(opened, u); return nil }
+	for _, bad := range []string{"https://evil.example/login?code=X", "file:///etc/passwd", "http://127.0.0.1:1/login", "javascript:alert(1)"} {
+		if err := openOnHub(open, "https://hub.test", bad); err == nil {
+			t.Errorf("%q opened", bad)
+		}
+	}
+	if err := openOnHub(open, "https://hub.test", "https://hub.test/login?code=X"); err != nil || len(opened) != 1 {
+		t.Fatalf("own page: %v %v", err, opened)
+	}
+}
+
 func pending(d time.Duration) *sockv1.FinishTerminalSignInResponse {
 	return &sockv1.FinishTerminalSignInResponse{Result: &sockv1.FinishTerminalSignInResponse_Pending{Pending: &sockv1.TerminalSignInPending{RetryAfter: durationpb.New(d)}}}
 }

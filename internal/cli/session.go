@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -121,7 +122,7 @@ func (a *App) login(cmd *cobra.Command, f signInFlags) error {
 	if err != nil {
 		return err
 	}
-	if err := a.showCode(stderr, f.noBrowser, start); err != nil {
+	if err := a.showCode(stderr, f.noBrowser, cfg.URL, start); err != nil {
 		return err
 	}
 	res, err := a.waitForBrowser(ctx, c, start)
@@ -315,13 +316,13 @@ func (a *App) registerNew(cmd *cobra.Command, c Clients, f signInFlags, label, t
 // whether a browser was opened to the page with the code filled in. The
 // page and the code are always printed, since the browser may be on
 // another device.
-func (a *App) showCode(stderr io.Writer, noBrowser bool, start *sockv1.StartTerminalSignInResponse) error {
+func (a *App) showCode(stderr io.Writer, noBrowser bool, hub string, start *sockv1.StartTerminalSignInResponse) error {
 	if _, err := fmt.Fprintf(stderr, "To sign in, open this page on any device and enter the code:\n\n  %s\n\n  %s\n\n", line(start.GetVerificationUrl()), line(start.GetUserCode())); err != nil {
 		return err
 	}
 	how := "Open it on any device; waiting for you to finish."
 	if !noBrowser {
-		if err := a.OpenBrowser(start.GetVerificationUrlComplete()); err == nil {
+		if err := openOnHub(a.OpenBrowser, hub, start.GetVerificationUrlComplete()); err == nil {
 			how = "Opened your browser to that page with the code filled in; waiting for you to finish."
 		} else {
 			warnf(stderr, "could not open a browser: %v", err)
@@ -446,4 +447,22 @@ func newLogoutCmd(app *App) *cobra.Command {
 			return err
 		},
 	}
+}
+
+// openOnHub opens page in the browser only when it is on the hub the
+// person configured, over https or the hub's own scheme: the hub chose the
+// page, but a URL it did not serve itself is not handed to the opener.
+func openOnHub(open func(string) error, hub, page string) error {
+	h, err := url.Parse(hub)
+	if err != nil {
+		return err
+	}
+	p, err := url.Parse(page)
+	if err != nil {
+		return err
+	}
+	if p.Scheme != h.Scheme || p.Host != h.Host || p.Scheme != "https" && p.Scheme != "http" {
+		return fmt.Errorf("the hub named %s, which is not on %s", line(p.Host), line(h.Host))
+	}
+	return open(page)
 }
