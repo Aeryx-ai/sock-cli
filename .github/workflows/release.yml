@@ -1,6 +1,7 @@
 name: release
 # A vX.Y.Z tag publishes the five sock archives to downloads.joinsock.com
-# (latest/cli-<os>-<arch>.json) and points the Homebrew formula at them.
+# (latest/cli-<os>-<arch>.json), attaches them and SHA256SUMS to a GitHub
+# release and points the Homebrew formula at them.
 on:
   push:
     tags: ['v*']
@@ -53,6 +54,19 @@ jobs:
           # All finish either way; publish-release.sh reuses a file it already
           # published, so a re-run completes whichever failed.
           st=0; for pid in "${pids[@]}"; do wait "$pid" || st=1; done; exit $st
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with: { name: dist, path: dist }
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag
 
   tap:
     needs: publish

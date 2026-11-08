@@ -12,9 +12,11 @@ or
 
     curl -fsSL https://joinsock.com/install.sh | sh
 
-or, with Go:
+or, with Go (1.26.9 or newer):
 
     go install github.com/aeryx-ai/sock-cli/cmd/sock@latest
+
+Each [release](https://github.com/Aeryx-ai/sock-cli/releases) carries the archives and a `SHA256SUMS` file to check them against.
 
 ## Build and test
 

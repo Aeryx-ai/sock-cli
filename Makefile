@@ -48,13 +48,15 @@ e2e-selfreg: build
 
 # dist cross-builds the release archives publish-release.sh uploads, one per
 # platform, all at once: sock-<os>-<arch>.tar.gz (.zip on Windows) holding the
-# binary and LICENSE at the archive root. The release workflow runs this.
+# binary and LICENSE at the archive root, plus SHA256SUMS over them. The release
+# workflow runs this.
 DIST_PLATFORMS := darwin-arm64 darwin-amd64 linux-arm64 linux-amd64 windows-amd64
 
 dist:
 	rm -rf bin/dist bin/dist-stage
 	$(MAKE) -j$(words $(DIST_PLATFORMS)) $(addprefix dist-,$(DIST_PLATFORMS)) VERSION=$(VERSION)
 	rm -rf bin/dist-stage
+	cd bin/dist && shasum -a 256 sock-* > SHA256SUMS
 
 # Inside dist-%: $* is <os>-<arch>.
 dist_os = $(word 1,$(subst -, ,$*))
