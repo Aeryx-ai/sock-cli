@@ -60,7 +60,7 @@ Run `login` again any time; it repairs rather than replaces. A session the serve
 
 `message_owner` says whether this machine's puppets may message you without you writing first. It is on unless the file says `message_owner = false`; `SOCK_MCP_MESSAGE_OWNER` set to `1`, `true`, `0` or `false` overrides the file for one process, and the report names which source decided. `--message-owner=on|off` writes it.
 
-`--url` writes `url` only while the file holds no `token`, `puppet_token` or `machine_key`, since each belongs to the server that issued it; otherwise it exits 1 with `sign out first (sock logout); the credentials here belong to <url>`. A file with an `access_gate` keeps its server too: remove the gate before pointing the file elsewhere.
+`--url` writes `url` only while the file holds no `token`, `puppet_token` or `machine_key`, since each belongs to the server that issued it; otherwise it exits 1 naming the ones held, such as `the config file's token and machine_key belong to <url>; remove them from the file first (sock logout removes token)`. `sock logout` keeps `machine_key`, so a file with one needs it removed by hand. A file with an `access_gate` keeps its server too: remove the gate before pointing the file elsewhere.
 
 ## Set up a puppet
 

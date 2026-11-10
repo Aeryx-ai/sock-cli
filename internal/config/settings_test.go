@@ -48,20 +48,30 @@ func TestSetURLWritesTheServer(t *testing.T) {
 // A credential is never sent to a server it was not issued by: url changes
 // only while the file holds none.
 func TestSetURLRefusesWhileACredentialIsPresent(t *testing.T) {
-	for _, key := range []string{"token", "puppet_token", "machine_key"} {
-		body := "url = \"https://old.example\"\n" + key + " = \"sock_xx_secret\"\n"
+	for _, tc := range []struct{ keys, want string }{
+		{"token", "the config file's token belongs to https://old.example; remove it from the file first (sock logout removes token)"},
+		{"puppet_token", "the config file's puppet_token belongs to https://old.example; remove it from the file first"},
+		{"machine_key", "the config file's machine_key belongs to https://old.example; remove it from the file first"},
+		{"token machine_key", "the config file's token and machine_key belong to https://old.example; remove them from the file first (sock logout removes token)"},
+		{"token puppet_token machine_key", "the config file's token, puppet_token and machine_key belong to https://old.example; remove them from the file first (sock logout removes token)"},
+	} {
+		body := "url = \"https://old.example\"\n"
+		for _, k := range strings.Fields(tc.keys) {
+			body += k + " = \"sock_xx_secret\"\n"
+		}
 		p := writeFile(t, 0o600, body)
 		err := SetURL(p, "https://new.example")
-		if !errors.Is(err, ErrCredentialsPresent) || err.Error() != "sign out first (sock logout); the credentials here belong to https://old.example" {
-			t.Fatalf("%s: %v", key, err)
+		if !errors.Is(err, ErrCredentialsPresent) || err == nil || err.Error() != tc.want {
+			t.Fatalf("%s: %v", tc.keys, err)
 		}
+		key := tc.keys
 		if b, _ := os.ReadFile(p); string(b) != body {
 			t.Fatalf("%s: file changed to %q", key, b)
 		}
 	}
 	// no url in the file: the credentials belong to the default server
 	p := writeFile(t, 0o600, "machine_key = \"sock_mk_secret\"\n")
-	if err := SetURL(p, "https://new.example"); err == nil || !strings.HasSuffix(err.Error(), "belong to "+DefaultURL) {
+	if err := SetURL(p, "https://new.example"); err == nil || !strings.Contains(err.Error(), "belongs to "+DefaultURL+";") {
 		t.Fatalf("got %v", err)
 	}
 }

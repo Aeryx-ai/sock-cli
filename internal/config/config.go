@@ -324,7 +324,28 @@ func SetMessageOwner(path string, on bool) error {
 
 // ErrCredentialsPresent means the config file holds a token, puppet_token or
 // machine_key, each of which belongs to the file's url.
-var ErrCredentialsPresent = errors.New("sign out first (sock logout)")
+var ErrCredentialsPresent = errors.New("the config file holds credentials for its url")
+
+// credentialsPresent is ErrCredentialsPresent naming the keys held and the
+// server they belong to. Only key names are printed, never values.
+type credentialsPresent struct {
+	keys []string
+	url  string
+}
+
+func (e credentialsPresent) Is(target error) bool { return target == ErrCredentialsPresent }
+
+func (e credentialsPresent) Error() string {
+	what, verb, them := e.keys[0], "belongs", "it"
+	if n := len(e.keys); n > 1 {
+		what, verb, them = strings.Join(e.keys[:n-1], ", ")+" and "+e.keys[n-1], "belong", "them"
+	}
+	msg := fmt.Sprintf("the config file's %s %s to %s; remove %s from the file first", what, verb, e.url, them)
+	if e.keys[0] == "token" {
+		msg += " (sock logout removes token)"
+	}
+	return msg
+}
 
 // credentialKeys are the keys whose values go only to the file's url.
 var credentialKeys = []string{"token", "puppet_token", "machine_key"}
@@ -343,10 +364,14 @@ func SetURL(path, url string) error {
 		if fileURL == "" {
 			fileURL = DefaultURL
 		}
+		held := credentialsPresent{url: fileURL}
 		for _, k := range credentialKeys {
 			if s, _ := m[k].(string); strings.TrimSpace(s) != "" {
-				return fmt.Errorf("%w; the credentials here belong to %s", ErrCredentialsPresent, fileURL)
+				held.keys = append(held.keys, k)
 			}
+		}
+		if len(held.keys) > 0 {
+			return held
 		}
 		if g, _ := m["access_gate"].(string); strings.TrimSpace(g) != "" && !SameServer(fileURL, url) {
 			return fmt.Errorf("the config file's access_gate belongs to %s; remove access_gate from the file first", fileURL)

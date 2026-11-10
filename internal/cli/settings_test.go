@@ -159,7 +159,7 @@ func TestSettingsWritesURLOnlyWithoutCredentials(t *testing.T) {
 		body := fmt.Sprintf("url = %q\n%s = \"sock_xx_secret\"\n", srv.URL, key)
 		writeConfig(t, app, body)
 		_, _, err := run(t, app, nil, "settings", "--url", "https://hub.example", "--message-owner=off")
-		if err == nil || err.Error() != "sign out first (sock logout); the credentials here belong to "+srv.URL {
+		if err == nil || !strings.HasPrefix(err.Error(), "the config file's "+key+" belongs to "+srv.URL+"; remove it from the file first") {
 			t.Fatalf("%s: %v", key, err)
 		}
 		if b, _ := os.ReadFile(app.ConfigPath); string(b) != body {
