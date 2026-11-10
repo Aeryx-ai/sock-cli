@@ -165,6 +165,11 @@ func TestLogoutSaysTheMachineKeyStays(t *testing.T) {
 	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.MachineKey != socktest.MachineKeyToken || fc.Token != "" {
 		t.Fatalf("config %+v", fc)
 	}
+	// owner messaging already off: the key stays, but nothing messages
+	writeConfig(t, app, fmt.Sprintf("url = %q\ntoken = %q\nmachine_key = %q\nmessage_owner = false\n", srv.URL, socktest.HumanToken, socktest.MachineKeyToken))
+	if _, errOut, err := run(t, app, nil, "logout"); err != nil || errOut != "sock: the machine key stays; owner messaging is off\n" {
+		t.Fatalf("logout with message_owner off: %q, %v", errOut, err)
+	}
 	// no machine key: nothing stays, so nothing is said
 	writeConfig(t, app, fmt.Sprintf("url = %q\ntoken = %q\n", srv.URL, socktest.HumanToken))
 	if _, errOut, err := run(t, app, nil, "logout"); err != nil || errOut != "" {

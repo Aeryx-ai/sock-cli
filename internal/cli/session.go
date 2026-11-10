@@ -541,7 +541,11 @@ func newLogoutCmd(app *App) *cobra.Command {
 				return err
 			}
 			if fc, err := client.LoadFileConfig(app.ConfigPath); err == nil && strings.TrimSpace(fc.MachineKey) != "" {
-				warn(cmd.ErrOrStderr(), "the machine key stays: sessions here can still message you; sock settings --message-owner=off stops that")
+				if on, _ := client.MessageOwner(app.Getenv, fc); on {
+					warn(cmd.ErrOrStderr(), "the machine key stays: sessions here can still message you; sock settings --message-owner=off stops that")
+				} else {
+					warn(cmd.ErrOrStderr(), "the machine key stays; owner messaging is off")
+				}
 			}
 			return nil
 		},
