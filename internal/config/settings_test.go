@@ -90,3 +90,41 @@ func TestSetURLRefusesABadURL(t *testing.T) {
 		t.Fatal("a refused url wrote the file")
 	}
 }
+
+// A token is removed only while the file still holds the one checked: a
+// newer one written since is kept.
+func TestRemoveCheckedToken(t *testing.T) {
+	body := "url = \"https://hub.example\"\ntoken = \"sock_st_newer_secret\"\n"
+	p := writeFile(t, 0o600, body)
+	if err := RemoveCheckedToken(p, "sock_st_checked_secret"); !errors.Is(err, ErrTokenChanged) || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("got %v", err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != body {
+		t.Fatalf("file changed to %q", b)
+	}
+	if err := RemoveCheckedToken(p, "sock_st_newer_secret"); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := client.LoadFileConfig(p); f.Token != "" || f.URL != "https://hub.example" {
+		t.Fatalf("%+v", f)
+	}
+}
+
+// A machine key is replaced only while the file still holds the rejected
+// one: a newer one written since is kept.
+func TestReplaceMachineKey(t *testing.T) {
+	body := "url = \"https://hub.example\"\nmachine_key = \"sock_mk_newer_secret\"\n"
+	p := writeFile(t, 0o600, body)
+	if err := ReplaceMachineKey(p, "sock_mk_dead_secret", "sock_mk_minted_secret", "https://hub.example", ""); !errors.Is(err, ErrMachineKeyExists) {
+		t.Fatalf("got %v", err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != body {
+		t.Fatalf("file changed to %q", b)
+	}
+	if err := ReplaceMachineKey(p, "sock_mk_newer_secret", "sock_mk_minted_secret", "https://hub.example", ""); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := client.LoadFileConfig(p); f.MachineKey != "sock_mk_minted_secret" {
+		t.Fatalf("%+v", f)
+	}
+}

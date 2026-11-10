@@ -204,8 +204,21 @@ var ErrMachineKeyExists = errors.New("config file already holds another machine_
 // unless force; the same one is left as it is. A file naming another url or
 // gate is refused, as PuppetFileConflict says.
 func SetMachineKey(path, key, url, gate string, force bool) error {
+	return writeMachineKey(path, key, url, gate, func(held string) bool { return force || held == "" })
+}
+
+// ReplaceMachineKey is SetMachineKey replacing old, the key found rejected
+// ("" when the file held none): another key written since is
+// ErrMachineKeyExists, so a newer one is kept.
+func ReplaceMachineKey(path, old, key, url, gate string) error {
+	return writeMachineKey(path, key, url, gate, func(held string) bool { return held == old })
+}
+
+// writeMachineKey writes key unless the file holds another one that may not
+// be replaced, decided on the file as read for the rewrite.
+func writeMachineKey(path, key, url, gate string, mayReplace func(held string) bool) error {
 	return rewrite(path, func(m map[string]any) error {
-		if s, _ := m["machine_key"].(string); !force && strings.TrimSpace(s) != "" && strings.TrimSpace(s) != key {
+		if s, _ := m["machine_key"].(string); strings.TrimSpace(s) != key && !mayReplace(strings.TrimSpace(s)) {
 			return ErrMachineKeyExists
 		}
 		// on the file as rewritten: a url written since any earlier check
@@ -273,10 +286,27 @@ func serverConflict(fileURL, fileGate, url, gate string) string {
 // RemoveToken deletes the token from the config file, keeping every other
 // key. A missing file is not an error.
 func RemoveToken(path string) error {
+	return removeToken(path, func(string) bool { return true })
+}
+
+// ErrTokenChanged means the config file no longer holds the token a command
+// checked.
+var ErrTokenChanged = errors.New("the config file's token changed since it was checked")
+
+// RemoveCheckedToken is RemoveToken while the file still holds token, the one
+// checked; another written since is ErrTokenChanged and kept.
+func RemoveCheckedToken(path, token string) error {
+	return removeToken(path, func(held string) bool { return held == token })
+}
+
+func removeToken(path string, may func(held string) bool) error {
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	return rewrite(path, func(m map[string]any) error {
+		if s, _ := m["token"].(string); !may(strings.TrimSpace(s)) {
+			return ErrTokenChanged
+		}
 		delete(m, "token")
 		return nil
 	})

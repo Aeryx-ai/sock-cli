@@ -356,7 +356,12 @@ func (a *App) keepSession(cmd *cobra.Command, cfg config.Config, existing string
 	me, err := a.checkSession(cmd.Context(), cfg, existing)
 	switch {
 	case rejected(err):
-		return false, config.RemoveToken(a.ConfigPath)
+		if err := config.RemoveCheckedToken(a.ConfigPath, existing); errors.Is(err, config.ErrTokenChanged) {
+			return false, errors.New("the config file's token changed while sock login checked it; run sock login again")
+		} else if err != nil {
+			return false, err
+		}
+		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("could not check the session in %s (%w); it is unchanged, run sock login again", a.ConfigPath, err)
 	}
@@ -408,9 +413,10 @@ func (a *App) keepMachineKey(cmd *cobra.Command, cfg config.Config, session stri
 	stderr := cmd.ErrOrStderr()
 	ctx := cmd.Context()
 	finish := "sign-in is saved; to let sock-mcp make a puppet per project, run: sock machine-key create | sock machine-key use"
-	replace := false
+	dead := "" // the key found rejected, replaced only while the file holds it
 	if fc, err := client.LoadFileConfig(a.ConfigPath); err == nil && strings.TrimSpace(fc.MachineKey) != "" {
-		switch err := a.checkKey(ctx, cfg, strings.TrimSpace(fc.MachineKey)); {
+		held := strings.TrimSpace(fc.MachineKey)
+		switch err := a.checkKey(ctx, cfg, held); {
 		case err == nil:
 			warn(stderr, "machine key works")
 			return
@@ -418,7 +424,7 @@ func (a *App) keepMachineKey(cmd *cobra.Command, cfg config.Config, session stri
 			warnf(stderr, "could not check the machine key (%v); kept it", err)
 			return
 		}
-		replace = true
+		dead = held
 	}
 	cfg.Token = session
 	short, _, _ := strings.Cut(a.host(), ".")
@@ -432,11 +438,15 @@ func (a *App) keepMachineKey(cmd *cobra.Command, cfg config.Config, session stri
 		warnf(stderr, "no machine key kept (%v); %s", client.Describe(err), finish)
 		return
 	}
-	if err := config.SetMachineKey(a.ConfigPath, res.GetToken(), cfg.URL, cfg.AccessGate, replace); err != nil {
+	// dead "" fills an empty machine_key only
+	if err := config.ReplaceMachineKey(a.ConfigPath, dead, res.GetToken(), cfg.URL, cfg.AccessGate); errors.Is(err, config.ErrMachineKeyExists) {
+		warnf(stderr, "a newer machine key is in the config file, so it was kept; revoke the one just minted with sock devices revoke %s", res.GetDevice().GetId())
+		return
+	} else if err != nil {
 		warnf(stderr, "no machine key kept (%v); %s", err, finish)
 		return
 	}
-	if replace {
+	if dead != "" {
 		warn(stderr, "replaced a machine key the server no longer accepts")
 		return
 	}

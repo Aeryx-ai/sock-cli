@@ -869,3 +869,30 @@ func TestLoginTreatsABare401AsUnchecked(t *testing.T) {
 		t.Fatal("machine key replaced on a bare 401")
 	}
 }
+
+// A machine key written while login replaced a rejected one is kept, and the
+// key login minted is named for revoking.
+func TestLoginKeepsAMachineKeyWrittenDuringTheReplace(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	fileSignedIn(t, srv, app, socktest.HumanToken, "sock_mk_dead_secret")
+	newer := fmt.Sprintf("url = %q\ntoken = %q\nmachine_key = %q\n", srv.URL, socktest.HumanToken, socktest.MachineKeyToken)
+	// the second hostname lookup names the key to mint, after the check
+	lookups := 0
+	app.Hostname = func() (string, error) {
+		if lookups++; lookups == 2 {
+			writeConfig(t, app, newer)
+		}
+		return "box", nil
+	}
+	_, errOut, err := run(t, app, nil, "login")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if errOut != "sock: a newer machine key is in the config file, so it was kept; revoke the one just minted with sock devices revoke device-mk\n" {
+		t.Fatalf("stderr %q", errOut)
+	}
+	if fileBody(t, app) != newer {
+		t.Fatal("the newer machine key was overwritten")
+	}
+}
