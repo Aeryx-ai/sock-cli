@@ -174,7 +174,7 @@ func NewRoot(app *App) *cobra.Command {
 		newDevicesCmd(app), newPuppetsCmd(app), newMachineKeyCmd(app),
 		newConversationsCmd(app), newSendCmd(app), newListenCmd(app), newFetchCmd(app), newAckCmd(app),
 		newBlockCmd(app), newUnblockCmd(app), newBlocksCmd(app), newReportCmd(app), newExportCmd(app),
-		newSkillCmd())
+		newSettingsCmd(app), newSkillCmd())
 	return root
 }
 

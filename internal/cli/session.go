@@ -352,8 +352,8 @@ func (a *App) keepSession(cmd *cobra.Command, cfg config.Config, existing string
 	if existing == "" {
 		return false, nil
 	}
-	cfg.Token, a.token = existing, existing
-	me, err := unary(cmd.Context(), a, newClients(cfg, a.userAgent()).Identity.GetMe, &sockv1.GetMeRequest{})
+	a.token = existing
+	me, err := a.checkSession(cmd.Context(), cfg, existing)
 	switch {
 	case rejected(err):
 		return false, config.RemoveToken(a.ConfigPath)
@@ -366,6 +366,20 @@ func (a *App) keepSession(cmd *cobra.Command, cfg config.Config, existing string
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "already signed in as @%s\n", line(me.GetAccount().GetHuman().GetHandle()))
 	return true, err
+}
+
+// checkSession is the session check: GetMe with token at cfg's server.
+func (a *App) checkSession(ctx context.Context, cfg config.Config, token string) (*sockv1.GetMeResponse, error) {
+	cfg.Token = token
+	return unary(ctx, a, newClients(cfg, a.userAgent()).Identity.GetMe, &sockv1.GetMeRequest{})
+}
+
+// checkKey is the machine key check: ListPuppets with key at cfg's server,
+// the one call a machine key may make that changes nothing.
+func (a *App) checkKey(ctx context.Context, cfg config.Config, key string) error {
+	cfg.Token = key
+	_, err := unary(ctx, a, newClients(cfg, a.userAgent()).Identity.ListPuppets, &sockv1.ListPuppetsRequest{})
+	return err
 }
 
 // rejected reports whether the hub answered that it no longer accepts the
@@ -386,10 +400,7 @@ func (a *App) keepMachineKey(cmd *cobra.Command, cfg config.Config, session stri
 	finish := "sign-in is saved; to let sock-mcp make a puppet per project, run: sock machine-key create | sock machine-key use"
 	replace := false
 	if fc, err := client.LoadFileConfig(a.ConfigPath); err == nil && strings.TrimSpace(fc.MachineKey) != "" {
-		kc := cfg
-		kc.Token = strings.TrimSpace(fc.MachineKey)
-		_, err := unary(ctx, a, newClients(kc, a.userAgent()).Identity.ListPuppets, &sockv1.ListPuppetsRequest{})
-		switch {
+		switch err := a.checkKey(ctx, cfg, strings.TrimSpace(fc.MachineKey)); {
 		case err == nil:
 			warn(stderr, "machine key works")
 			return

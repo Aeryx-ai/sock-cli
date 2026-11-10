@@ -50,6 +50,18 @@ Run `login` again any time; it repairs rather than replaces. A session the serve
 
 `sock logout` signs the session out and removes its token; it keeps the token when the server is unreachable, so retry.
 
+## Settings
+
+    sock settings
+    sock settings --message-owner=off
+    sock settings --url https://staging.example
+
+`settings` reports the config file: its path, the `url` its credentials belong to, whether the server accepts the session (`token`) and the `machine_key` (`valid`, `missing`, `rejected` or `unchecked`, with the handle of a valid session), whether a `puppet_token` is present, and `message_owner`. It never prints a credential and exits 0 whatever the checks answer; `--json` prints the same as one object.
+
+`message_owner` says whether this machine's puppets may message you without you writing first. It is on unless the file says `message_owner = false`; `SOCK_MCP_MESSAGE_OWNER` set to `1`, `true`, `0` or `false` overrides the file for one process, and the report names which source decided. `--message-owner=on|off` writes it.
+
+`--url` writes `url` only while the file holds no `token`, `puppet_token` or `machine_key`, since each belongs to the server that issued it; otherwise it exits 1 with `sign out first (sock logout); the credentials here belong to <url>`. A file with an `access_gate` keeps its server too: remove the gate before pointing the file elsewhere.
+
 ## Set up a puppet
 
 Create a puppet (`sock puppets create <name> --token-label <label>`, or in the sock app) and copy its token, then:
@@ -85,6 +97,7 @@ Global flags: `--url`, `--token`, `--json` (JSON lines instead of text). `send` 
 An `<account>` is an account id or `@handle`.
 
     sock login | logout
+    sock settings [--message-owner=on|off] [--url <url>]   # report the config file and check its credentials
     sock whoami
     sock terms                                   # accepted and current version
     sock terms accept <version>
