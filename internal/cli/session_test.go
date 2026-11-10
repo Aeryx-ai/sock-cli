@@ -150,6 +150,28 @@ func TestLogout(t *testing.T) {
 	}
 }
 
+// logout keeps the machine key, and says what that leaves on.
+func TestLogoutSaysTheMachineKeyStays(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	writeConfig(t, app, fmt.Sprintf("url = %q\ntoken = %q\nmachine_key = %q\n", srv.URL, socktest.HumanToken, socktest.MachineKeyToken))
+	out, errOut, err := run(t, app, nil, "logout")
+	if err != nil || out != "signed out\n" {
+		t.Fatalf("logout: %q, %v", out, err)
+	}
+	if errOut != "sock: the machine key stays: sessions here can still message you; sock settings --message-owner=off stops that\n" {
+		t.Fatalf("stderr %q", errOut)
+	}
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.MachineKey != socktest.MachineKeyToken || fc.Token != "" {
+		t.Fatalf("config %+v", fc)
+	}
+	// no machine key: nothing stays, so nothing is said
+	writeConfig(t, app, fmt.Sprintf("url = %q\ntoken = %q\n", srv.URL, socktest.HumanToken))
+	if _, errOut, err := run(t, app, nil, "logout"); err != nil || errOut != "" {
+		t.Fatalf("logout without a key: %v, %q", err, errOut)
+	}
+}
+
 func TestLogoutAlreadyRevokedRemovesToken(t *testing.T) {
 	srv := socktest.New(t)
 	srv.Fail = map[string]error{"SignOut": socktest.Error(connect.CodeUnauthenticated, sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID)}

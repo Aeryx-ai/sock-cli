@@ -48,7 +48,7 @@ New to sock: sign in the same way. An address with no account is asked for a han
 
 Run `login` again any time; it repairs rather than replaces. A session the server still accepts is kept: it prints `already signed in as @<handle>` and opens no browser. One the server rejects is removed, then you sign in as above. A session it cannot check (the server is unreachable) leaves the file as it is and exits 1, so retry. A second run with a working session and machine key changes nothing at the hub. `login` refuses when the config file's `token` is a puppet token, since that is shown only once: keep a copy and remove it, or keep a second config with `XDG_CONFIG_HOME=<dir> sock login`. The file's credentials belong to its `url` (the default when it has none), so a `login` with `--url` or `SOCK_URL` naming another server is refused.
 
-`sock logout` signs the session out and removes its token; it keeps the token when the server is unreachable, so retry.
+`sock logout` signs the session out and removes its token; it keeps the token when the server is unreachable, so retry. It keeps `machine_key`, so sessions on this machine can still message you; `sock settings --message-owner=off` stops that.
 
 ## Settings
 

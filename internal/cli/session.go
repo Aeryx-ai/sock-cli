@@ -482,7 +482,9 @@ func newLogoutCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout",
 		Short: "Sign out the session in the config file and remove its token",
-		Args:  cobra.NoArgs,
+		Long: "Sign out the config file's session at the file's server and remove its token. The machine_key stays, so " +
+			"sessions on this machine can still message you; sock settings --message-owner=off stops that.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			token, err := config.FileToken(app.ConfigPath)
 			if err != nil {
@@ -515,8 +517,13 @@ func newLogoutCmd(app *App) *cobra.Command {
 			if err := config.RemoveToken(app.ConfigPath); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), "signed out")
-			return err
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), "signed out"); err != nil {
+				return err
+			}
+			if fc, err := client.LoadFileConfig(app.ConfigPath); err == nil && strings.TrimSpace(fc.MachineKey) != "" {
+				warn(cmd.ErrOrStderr(), "the machine key stays: sessions here can still message you; sock settings --message-owner=off stops that")
+			}
+			return nil
 		},
 	}
 }
