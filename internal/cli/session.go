@@ -383,9 +383,11 @@ func (a *App) checkKey(ctx context.Context, cfg config.Config, key string) error
 }
 
 // rejected reports whether the hub answered that it no longer accepts the
-// credential a call carried, rather than not answering.
+// credential a call carried: TOKEN_INVALID, which the hub attaches to every
+// unknown, revoked or wrong token. A bare 401 (a proxy in front of the hub)
+// is not that answer.
 func rejected(err error) bool {
-	return connect.CodeOf(err) == connect.CodeUnauthenticated || client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID
+	return client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID
 }
 
 // keepMachineKey makes sure the config file holds a machine key the hub

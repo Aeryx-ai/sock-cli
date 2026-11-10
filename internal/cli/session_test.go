@@ -844,3 +844,28 @@ func TestRegisterIsGone(t *testing.T) {
 		t.Fatal("register still listed in help")
 	}
 }
+
+// A 401 with no TOKEN_INVALID reason (a proxy in front of the hub) is not the
+// hub rejecting the credential: nothing is removed or replaced.
+func TestLoginTreatsABare401AsUnchecked(t *testing.T) {
+	bare := connect.NewError(connect.CodeUnauthenticated, errors.New("proxy says no"))
+	srv := socktest.New(t)
+	srv.Fail = map[string]error{"GetMe": bare}
+	app := humanApp(t, srv, nil)
+	body := fileSignedIn(t, srv, app, socktest.HumanToken, socktest.MachineKeyToken)
+	if _, _, err := run(t, app, nil, "login"); err == nil || !strings.Contains(err.Error(), "could not check the session") {
+		t.Fatalf("session: %v", err)
+	}
+	if fileBody(t, app) != body || hubWrites(srv) != 0 {
+		t.Fatal("session removed on a bare 401")
+	}
+
+	srv.Fail = map[string]error{"ListPuppets": bare}
+	_, errOut, err := run(t, app, nil, "login")
+	if err != nil || !strings.HasPrefix(errOut, "sock: could not check the machine key (") {
+		t.Fatalf("key: %v, %q", err, errOut)
+	}
+	if fileBody(t, app) != body || hubWrites(srv) != 0 {
+		t.Fatal("machine key replaced on a bare 401")
+	}
+}
