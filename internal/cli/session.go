@@ -368,16 +368,24 @@ func (a *App) keepSession(cmd *cobra.Command, cfg config.Config, existing string
 	return true, err
 }
 
-// checkSession is the session check: GetMe with token at cfg's server.
+// checkSession is the session check: GetMe with token at cfg's server. A
+// server, token or gate that fails client.Validate is sent nothing.
 func (a *App) checkSession(ctx context.Context, cfg config.Config, token string) (*sockv1.GetMeResponse, error) {
 	cfg.Token = token
+	if err := client.Validate(cfg.Config); err != nil {
+		return nil, err
+	}
 	return unary(ctx, a, newClients(cfg, a.userAgent()).Identity.GetMe, &sockv1.GetMeRequest{})
 }
 
 // checkKey is the machine key check: ListPuppets with key at cfg's server,
-// the one call a machine key may make that changes nothing.
+// the one call a machine key may make that changes nothing. Validated like
+// checkSession.
 func (a *App) checkKey(ctx context.Context, cfg config.Config, key string) error {
 	cfg.Token = key
+	if err := client.Validate(cfg.Config); err != nil {
+		return err
+	}
 	_, err := unary(ctx, a, newClients(cfg, a.userAgent()).Identity.ListPuppets, &sockv1.ListPuppetsRequest{})
 	return err
 }

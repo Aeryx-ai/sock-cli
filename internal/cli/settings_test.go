@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -164,5 +165,29 @@ func TestSettingsWritesURLOnlyWithoutCredentials(t *testing.T) {
 		if b, _ := os.ReadFile(app.ConfigPath); string(b) != body {
 			t.Fatalf("%s: file changed", key)
 		}
+	}
+}
+
+// A url every other command refuses (cleartext to a host that is not
+// loopback) gets no credential: both checks are unchecked and nothing is sent.
+func TestSettingsSendsNothingToAnInvalidURL(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := "http://localhost.:" + u.Port()
+	writeConfig(t, app, fmt.Sprintf("url = %q\ntoken = %q\nmachine_key = %q\n", bad, socktest.HumanToken, socktest.MachineKeyToken))
+	out, _, err := run(t, app, nil, "--json", "settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := settingsOf(t, out)
+	if s.Session.Check != "unchecked" || s.Session.Reason == "" || s.MachineKey.Check != "unchecked" || s.MachineKey.Reason == "" {
+		t.Fatalf("json %+v", s)
+	}
+	if len(srv.Calls) != 0 || len(srv.UserAgents) != 0 {
+		t.Fatalf("%d calls reached %s", len(srv.Calls), bad)
 	}
 }
