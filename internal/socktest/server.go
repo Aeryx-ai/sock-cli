@@ -29,6 +29,10 @@ const Token = "sock_pt_testdevice_testsecret"
 // MachineKeyToken is a machine key the fake accepts.
 const MachineKeyToken = "sock_mk_mkdevice_mksecret"
 
+// MintedMachineKey is the machine key MintMachineKey issues, which the fake
+// then accepts.
+const MintedMachineKey = "sock_mk_device-mk_secret"
+
 // HumanDeviceID is the device inside HumanToken.
 const HumanDeviceID = "0a0a0a0a-0000-4000-8000-000000000001"
 
@@ -165,7 +169,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if a := r.Header.Get("Authorization"); a != "Bearer "+Token && a != "Bearer "+HumanToken && a != "Bearer "+MachineKeyToken && a != "Bearer sock_pt_device-new_secret" {
+		if a := r.Header.Get("Authorization"); a != "Bearer "+Token && a != "Bearer "+HumanToken && a != "Bearer "+MachineKeyToken && a != "Bearer sock_pt_device-new_secret" && a != "Bearer "+MintedMachineKey {
 			err := withReason(connect.NewError(connect.CodeUnauthenticated, errors.New("token rejected")), sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID)
 			_ = connect.NewErrorWriter().Write(w, r, err)
 			return

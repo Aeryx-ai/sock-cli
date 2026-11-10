@@ -262,20 +262,218 @@ func TestLoginAlsoKeepsAMachineKey(t *testing.T) {
 	}
 }
 
-// A machine key the file already holds is never replaced by a login.
+// A machine key the file already holds is never replaced by a login while
+// the server accepts it.
 func TestLoginKeepsAnExistingMachineKey(t *testing.T) {
 	srv := socktest.New(t)
 	app := humanApp(t, srv, nil)
 	withBrowser(t, app, srv)
-	writeConfig(t, app, "machine_key = \"sock_mk_existing_secret\"\n")
-	if _, errOut, err := run(t, app, nil, "login"); err != nil {
+	writeConfig(t, app, fmt.Sprintf("url = %q\nmachine_key = %q\n", srv.URL, socktest.MachineKeyToken))
+	_, errOut, err := run(t, app, nil, "login")
+	if err != nil {
 		t.Fatalf("login: %v, stderr %q", err, errOut)
 	}
-	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.MachineKey != "sock_mk_existing_secret" {
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.MachineKey != socktest.MachineKeyToken {
 		t.Fatalf("machine_key replaced: %+v", fc)
 	}
 	if n := len(srv.CallsTo("MintMachineKey")); n != 0 {
 		t.Fatalf("%d machine keys minted though the file had one", n)
+	}
+	if !strings.Contains(errOut, "sock: machine key works\n") {
+		t.Fatalf("stderr %q", errOut)
+	}
+}
+
+// fileSignedIn writes a file holding a session and a machine key for srv, as a
+// login writes it, with GetMe answering the human.
+func fileSignedIn(t *testing.T, srv *socktest.Server, app *App, token, key string) string {
+	t.Helper()
+	srv.Me = socktest.Human()
+	body := fmt.Sprintf("url = %q\ntoken = %q\n", srv.URL, token)
+	if key != "" {
+		body += fmt.Sprintf("machine_key = %q\n", key)
+	}
+	writeConfig(t, app, body)
+	return body
+}
+
+func fileBody(t *testing.T, app *App) string {
+	t.Helper()
+	b, err := os.ReadFile(app.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// hubWrites are the calls that change something at the hub.
+func hubWrites(srv *socktest.Server) int {
+	n := 0
+	for _, m := range []string{"StartTerminalSignIn", "FinishTerminalSignIn", "RegisterWithEmail", "MintMachineKey", "SignOut"} {
+		n += len(srv.CallsTo(m))
+	}
+	return n
+}
+
+// A valid session is never replaced: no browser, no sign-in, and a valid
+// machine key beside it is only checked.
+func TestLoginAlreadySignedIn(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil) // its OpenBrowser fails the test
+	body := fileSignedIn(t, srv, app, socktest.HumanToken, socktest.MachineKeyToken)
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil {
+		t.Fatalf("login: %v, stderr %q", err, errOut)
+	}
+	if out != "already signed in as @guy\n" || errOut != "sock: machine key works\n" {
+		t.Fatalf("stdout %q, stderr %q", out, errOut)
+	}
+	if n := hubWrites(srv); n != 0 {
+		t.Fatalf("%d hub writes", n)
+	}
+	if fileBody(t, app) != body {
+		t.Fatal("config file changed")
+	}
+	if got := srv.CallsTo("GetMe")[0].Header.Get("Authorization"); got != "Bearer "+socktest.HumanToken {
+		t.Fatalf("session checked with %q", got)
+	}
+	if got := srv.CallsTo("ListPuppets")[0].Header.Get("Authorization"); got != "Bearer "+socktest.MachineKeyToken {
+		t.Fatalf("machine key checked with %q", got)
+	}
+}
+
+// A second login after a first one makes no hub write.
+func TestLoginIsIdempotent(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	b := withBrowser(t, app, srv)
+	if _, errOut, err := run(t, app, nil, "login"); err != nil {
+		t.Fatalf("first login: %v, %q", err, errOut)
+	}
+	srv.Me = socktest.Human()
+	writes, body := hubWrites(srv), fileBody(t, app)
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil || out != "already signed in as @guy\n" || errOut != "sock: machine key works\n" {
+		t.Fatalf("second login: %v, %q, %q", err, out, errOut)
+	}
+	if hubWrites(srv) != writes || len(b.opened) != 1 || fileBody(t, app) != body {
+		t.Fatal("second login wrote")
+	}
+}
+
+// A session the hub rejects is removed before sign-in starts, then replaced.
+func TestLoginReplacesARejectedSession(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	b := withBrowser(t, app, srv)
+	fileSignedIn(t, srv, app, "sock_st_dead_secret", socktest.MachineKeyToken)
+	app.OpenBrowser = func(u string) error {
+		if tok := fileToken(t, app); tok != "" {
+			t.Errorf("rejected session %q still in the file during sign-in", tok)
+		}
+		return b.open(u)
+	}
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil {
+		t.Fatalf("login: %v, stderr %q", err, errOut)
+	}
+	if out != "signed in as @guy on device "+socktest.HumanDeviceID+"\n" || fileToken(t, app) != socktest.HumanToken {
+		t.Fatalf("stdout %q, token %q", out, fileToken(t, app))
+	}
+	if strings.Contains(out+errOut, "sock_st_dead_secret") {
+		t.Fatal("the rejected token was printed")
+	}
+	if !strings.Contains(errOut, "sock: machine key works\n") || len(srv.CallsTo("MintMachineKey")) != 0 {
+		t.Fatalf("stderr %q", errOut)
+	}
+}
+
+// A session that cannot be checked is left alone: exit 1, file untouched.
+func TestLoginUncheckedSessionChangesNothing(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Fail = map[string]error{"GetMe": socktest.Unavailable()}
+	app := humanApp(t, srv, nil)
+	body := fileSignedIn(t, srv, app, socktest.HumanToken, "")
+	_, _, err := run(t, app, nil, "login")
+	if err == nil || !strings.Contains(err.Error(), "could not check the session") {
+		t.Fatalf("got %v", err)
+	}
+	if fileBody(t, app) != body || hubWrites(srv) != 0 {
+		t.Fatal("unchecked session touched")
+	}
+}
+
+// With a valid session and no machine key, login mints one.
+func TestLoginMintsAMissingMachineKey(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	fileSignedIn(t, srv, app, socktest.HumanToken, "")
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil || out != "already signed in as @guy\n" {
+		t.Fatalf("login: %v, %q", err, out)
+	}
+	if errOut != "sock: kept a machine key for box: each project you open gets its own puppet\n" {
+		t.Fatalf("stderr %q", errOut)
+	}
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.MachineKey != "sock_mk_device-mk_secret" {
+		t.Fatalf("config %+v", fc)
+	}
+}
+
+// A machine key the hub rejects is replaced without revoking it.
+func TestLoginReplacesARejectedMachineKey(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	fileSignedIn(t, srv, app, socktest.HumanToken, "sock_mk_dead_secret")
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil || out != "already signed in as @guy\n" {
+		t.Fatalf("login: %v, %q", err, out)
+	}
+	if errOut != "sock: replaced a machine key the server no longer accepts\n" {
+		t.Fatalf("stderr %q", errOut)
+	}
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.MachineKey != "sock_mk_device-mk_secret" || fc.Token != socktest.HumanToken {
+		t.Fatalf("config %+v", fc)
+	}
+	if n := len(srv.CallsTo("RevokeDevice")); n != 0 {
+		t.Fatalf("%d revokes", n)
+	}
+}
+
+// A machine key that cannot be checked is kept, with a warning.
+func TestLoginKeepsAnUncheckedMachineKey(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Fail = map[string]error{"ListPuppets": socktest.Unavailable()}
+	app := humanApp(t, srv, nil)
+	body := fileSignedIn(t, srv, app, socktest.HumanToken, socktest.MachineKeyToken)
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil || out != "already signed in as @guy\n" {
+		t.Fatalf("login: %v, %q", err, out)
+	}
+	if !strings.HasPrefix(errOut, "sock: could not check the machine key (") || !strings.HasSuffix(errOut, "); kept it\n") {
+		t.Fatalf("stderr %q", errOut)
+	}
+	if fileBody(t, app) != body || hubWrites(srv) != 0 {
+		t.Fatal("unchecked machine key touched")
+	}
+}
+
+// The file's credentials belong to its url, the default when it names none:
+// a login at another server never sends them there.
+func TestLoginRefusesAnotherServerForTheFilesCredentials(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil) // SOCK_URL is srv
+	for _, body := range []string{
+		fmt.Sprintf("machine_key = %q\n", socktest.MachineKeyToken),
+		fmt.Sprintf("token = %q\n", socktest.HumanToken),
+	} {
+		writeConfig(t, app, body)
+		if _, _, err := run(t, app, nil, "login"); err == nil {
+			t.Fatalf("%q: login at another server ran", body)
+		}
+		if len(srv.Calls) != 0 || fileBody(t, app) != body {
+			t.Fatalf("%q: credentials sent to SOCK_URL", body)
+		}
 	}
 }
 

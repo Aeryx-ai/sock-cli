@@ -169,7 +169,7 @@ func (s *Server) MintMachineKey(_ context.Context, req *connect.Request[sockv1.M
 	}
 	return ok(&sockv1.MintMachineKeyResponse{
 		Device: Device("device-mk", "human-1", req.Msg.GetLabel()),
-		Token:  "sock_mk_device-mk_secret",
+		Token:  MintedMachineKey,
 	})
 }
 

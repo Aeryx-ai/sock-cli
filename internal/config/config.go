@@ -243,6 +243,21 @@ func PuppetFileConflict(path, url, gate string) (string, error) {
 	return serverConflict(f.URL, f.AccessGate, url, gate), nil
 }
 
+// CredentialConflict is PuppetFileConflict for a command that also sends the
+// file's own credentials: a file holding one names its server even without
+// url, DefaultURL then, so they never go to another.
+func CredentialConflict(path, url, gate string) (string, error) {
+	f, err := client.LoadFileConfig(path)
+	if err != nil {
+		return "", err
+	}
+	fileURL := f.URL
+	if fileURL == "" && strings.TrimSpace(f.Token+f.PuppetToken+f.MachineKey) != "" {
+		fileURL = DefaultURL
+	}
+	return serverConflict(fileURL, f.AccessGate, url, gate), nil
+}
+
 // serverConflict says why a credential for url and gate cannot sit in a file
 // naming fileURL and fileGate, or "" when it can.
 func serverConflict(fileURL, fileGate, url, gate string) string {

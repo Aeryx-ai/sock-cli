@@ -46,7 +46,9 @@ New to sock: sign in the same way. An address with no account is asked for a han
 
 `login` takes `--label` (the device name in `sock devices`, default `sock CLI on <hostname>`) and `--no-browser` (do not try to open one; the page and the code are printed either way). It gives up after ten minutes.
 
-`login` refuses when the config file already holds a token, since a puppet token there is shown only once. Run `sock logout` first, or keep a second config with `XDG_CONFIG_HOME=<dir> sock login`. `sock logout` signs the session out and removes its token; it keeps the token when the server is unreachable, so retry.
+Run `login` again any time; it repairs rather than replaces. A session the server still accepts is kept: it prints `already signed in as @<handle>` and opens no browser. One the server rejects is removed, then you sign in as above. A session it cannot check (the server is unreachable) leaves the file as it is and exits 1, so retry. A second run with a working session and machine key changes nothing at the hub. `login` refuses when the config file's `token` is a puppet token, since that is shown only once: keep a copy and remove it, or keep a second config with `XDG_CONFIG_HOME=<dir> sock login`. The file's credentials belong to its `url` (the default when it has none), so a `login` with `--url` or `SOCK_URL` naming another server is refused.
+
+`sock logout` signs the session out and removes its token; it keeps the token when the server is unreachable, so retry.
 
 ## Set up a puppet
 
@@ -123,7 +125,7 @@ An `<account>` is an account id or `@handle`.
 
 `listen --as-puppet [--project <dir>]` resolves the credential the same way and checks the cached project token at start (a service manager restarts `listen`). The `--exec` child of any puppet listener gets that puppet's `SOCK_TOKEN` and `SOCK_URL`, which a runner's owner check and a Codex agent's sock-mcp need; a human session token is never passed to the child.
 
-`sock login` also mints a machine key for this host and keeps it as `machine_key` in the config file (unless the file already has one), so one sign-in is enough: sock-mcp then makes each project its own puppet, `<project> on <host>`. A key that cannot be minted does not undo the login; it says to run `sock machine-key create | sock machine-key use`.
+`sock login` also keeps a machine key for this host as `machine_key` in the config file, so one sign-in is enough: sock-mcp then makes each project its own puppet, `<project> on <host>`. It checks a key the file already holds: one that works is kept (`machine key works`), a missing one is minted (`kept a machine key for <label>: ...`), one the server rejects is replaced (`replaced a machine key the server no longer accepts`) and one it cannot check is kept with a warning. A key that cannot be minted does not undo the login; it says to run `sock machine-key create | sock machine-key use`.
 
 `send --as-puppet` speaks as the puppet sock-mcp would, through the same sock-client decision: `SOCK_TOKEN`, else the config file's `machine_key` (the puppet of the project in `--project`, default the working directory; `CLAUDE_PROJECT_DIR` wins when set), else its `puppet_token`. It never uses your login. A cached project puppet token is used without asking the hub first; when the hub rejects it (the puppet was erased) the token is checked, replaced and the message sent once more. Puppets of removed repositories are swept at most every 6 hours. A hook passes the directory its sock-mcp starts in, so a Codex plugin hook passes `PLUGIN_ROOT` and both land on `puppet_token`.
 

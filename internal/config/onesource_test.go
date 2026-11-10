@@ -103,3 +103,25 @@ func TestSameServer(t *testing.T) {
 		}
 	}
 }
+
+// A file holding a credential names its server even without url: the
+// default, so a command at another server never sends it there.
+func TestCredentialConflict(t *testing.T) {
+	cases := []struct {
+		body, url string
+		conflict  bool
+	}{
+		{"machine_key = \"sock_mk_secret\"\n", "https://other.example", true},
+		{"puppet_token = \"sock_pt_secret\"\n", "https://other.example", true},
+		{"token = \"sock_st_secret\"\n", "https://other.example", true},
+		{"machine_key = \"sock_mk_secret\"\n", DefaultURL, false},
+		{"url = \"https://other.example\"\nmachine_key = \"sock_mk_secret\"\n", "https://other.example", false},
+		{"message_owner = false\n", "https://other.example", false},
+	}
+	for _, c := range cases {
+		why, err := CredentialConflict(writeFile(t, 0o600, c.body), c.url, "")
+		if err != nil || (why != "") != c.conflict {
+			t.Errorf("%q at %s: %q, %v", c.body, c.url, why, err)
+		}
+	}
+}

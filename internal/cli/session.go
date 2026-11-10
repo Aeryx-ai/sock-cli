@@ -66,7 +66,11 @@ func newLoginCmd(app *App) *cobra.Command {
 			"The session token goes to the config file, never to the terminal.\n\n" +
 			"A sign-in to an address with no sock account registers one: on a terminal you are asked for a handle, a name and the terms " +
 			"(" + termsURL + ", " + privacyURL + "; this build ships terms version " + termsVersion + "), and for an invite while registration is invite-only; " +
-			"off a terminal pass --handle, --name and --accept-terms, and --invite when required.",
+			"off a terminal pass --handle, --name and --accept-terms, and --invite when required.\n\n" +
+			"Run it again any time: a session the server still accepts is kept (\"already signed in\") and no browser opens; " +
+			"one it rejects is removed and replaced. login also keeps a machine key for this host (machine_key) so sock-mcp makes " +
+			"each project its own puppet: one that works is kept, a missing or rejected one is minted, one that cannot be checked is kept. " +
+			"A puppet token in the config file's token is refused: it is shown only once.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return app.login(cmd, f) },
 	}
@@ -87,8 +91,10 @@ func newRegisterCmd(*App) *cobra.Command {
 	}
 }
 
-// login runs the terminal sign-in (sock-contract ADR 52), registers a new
-// person with the ticket it may answer, then writes the session token.
+// login repairs this machine's sign-in: a session the hub accepts is kept,
+// one it rejects is removed and replaced by the terminal sign-in (sock-contract
+// ADR 52), which registers a new person with the ticket it may answer. Then
+// the machine key gets the same check.
 func (a *App) login(cmd *cobra.Command, f signInFlags) error {
 	cfg, err := a.load(true)
 	if err != nil {
@@ -97,18 +103,24 @@ func (a *App) login(cmd *cobra.Command, f signInFlags) error {
 	if a.ConfigPath == "" {
 		return errors.New("no config file path: set HOME or XDG_CONFIG_HOME")
 	}
-	if existing, err := config.FileToken(a.ConfigPath); err != nil {
+	existing, err := config.FileToken(a.ConfigPath)
+	if err != nil {
 		return err
-	} else if existing != "" {
-		return a.tokenExists()
 	}
-	if why, err := config.PuppetFileConflict(a.ConfigPath, cfg.URL, cfg.AccessGate); err != nil {
+	if existing != "" && !strings.HasPrefix(existing, humanTokenPrefix) {
+		return a.tokenExists() // a puppet token there is shown only once
+	}
+	// the file's credentials go only to the file's server
+	if why, err := config.CredentialConflict(a.ConfigPath, cfg.URL, cfg.AccessGate); err != nil {
 		return err
 	} else if why != "" {
 		return errors.New(why)
 	}
 	label, err := a.deviceLabel(f.label)
 	if err != nil {
+		return err
+	}
+	if done, err := a.keepSession(cmd, cfg, existing); done || err != nil {
 		return err
 	}
 	stderr := cmd.ErrOrStderr()
@@ -145,7 +157,7 @@ func (a *App) login(cmd *cobra.Command, f signInFlags) error {
 	} else if err != nil {
 		return fmt.Errorf("signed in, but saving the token failed (%w); revoke device %s with sock devices revoke from another session", err, session.GetDevice().GetId())
 	}
-	a.keepMachineKey(cmd, cfg, session)
+	a.keepMachineKey(cmd, cfg, session.GetToken())
 	session.Token = ""
 	if a.jsonOut {
 		return a.printer().json(cmd.OutOrStdout(), session)
@@ -332,30 +344,79 @@ func (a *App) showCode(stderr io.Writer, noBrowser bool, hub string, start *sock
 	return err
 }
 
-// keepMachineKey mints a machine key for this host with the login just made
-// and keeps it as machine_key, unless the file already has one: sign in once
-// and sock-mcp makes each project its own puppet. The login stands either
-// way: a key that cannot be minted or saved only says how to finish.
-func (a *App) keepMachineKey(cmd *cobra.Command, cfg config.Config, session *sockv1.Session) {
-	stderr := cmd.ErrOrStderr()
-	finish := "sign-in is saved; to let sock-mcp make a puppet per project, run: sock machine-key create | sock machine-key use"
-	if fc, err := client.LoadFileConfig(a.ConfigPath); err == nil && strings.TrimSpace(fc.MachineKey) != "" {
-		return
+// keepSession checks existing, the config file's session, with the hub. done
+// is true when it is valid: it is kept and reported, and the machine key
+// checked. A rejected session is removed so a sign-in can replace it; one that
+// cannot be checked is refused with the file untouched.
+func (a *App) keepSession(cmd *cobra.Command, cfg config.Config, existing string) (done bool, err error) {
+	if existing == "" {
+		return false, nil
 	}
-	cfg.Token = session.GetToken()
+	cfg.Token, a.token = existing, existing
+	me, err := unary(cmd.Context(), a, newClients(cfg, a.userAgent()).Identity.GetMe, &sockv1.GetMeRequest{})
+	switch {
+	case rejected(err):
+		return false, config.RemoveToken(a.ConfigPath)
+	case err != nil:
+		return false, fmt.Errorf("could not check the session in %s (%w); it is unchanged, run sock login again", a.ConfigPath, err)
+	}
+	a.keepMachineKey(cmd, cfg, existing)
+	if a.jsonOut {
+		return true, a.printer().json(cmd.OutOrStdout(), me)
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "already signed in as @%s\n", line(me.GetAccount().GetHuman().GetHandle()))
+	return true, err
+}
+
+// rejected reports whether the hub answered that it no longer accepts the
+// credential a call carried, rather than not answering.
+func rejected(err error) bool {
+	return connect.CodeOf(err) == connect.CodeUnauthenticated || client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID
+}
+
+// keepMachineKey makes sure the config file holds a machine key the hub
+// accepts, so sock-mcp makes each project its own puppet: one that works is
+// kept, a missing or rejected one is minted with session and saved (a rejected
+// one is overwritten, not revoked: the hub no longer accepts it), and one that
+// cannot be checked is kept with a warning. The login stands either way: a key
+// that cannot be minted or saved only says how to finish.
+func (a *App) keepMachineKey(cmd *cobra.Command, cfg config.Config, session string) {
+	stderr := cmd.ErrOrStderr()
+	ctx := cmd.Context()
+	finish := "sign-in is saved; to let sock-mcp make a puppet per project, run: sock machine-key create | sock machine-key use"
+	replace := false
+	if fc, err := client.LoadFileConfig(a.ConfigPath); err == nil && strings.TrimSpace(fc.MachineKey) != "" {
+		kc := cfg
+		kc.Token = strings.TrimSpace(fc.MachineKey)
+		_, err := unary(ctx, a, newClients(kc, a.userAgent()).Identity.ListPuppets, &sockv1.ListPuppetsRequest{})
+		switch {
+		case err == nil:
+			warn(stderr, "machine key works")
+			return
+		case !rejected(err):
+			warnf(stderr, "could not check the machine key (%v); kept it", err)
+			return
+		}
+		replace = true
+	}
+	cfg.Token = session
 	short, _, _ := strings.Cut(a.host(), ".")
 	label, err := labelOr("", short)
 	if err != nil {
 		warnf(stderr, "no machine key kept: %v; %s", err, finish)
 		return
 	}
-	res, err := unary(cmd.Context(), a, newClients(cfg, a.userAgent()).Identity.MintMachineKey, &sockv1.MintMachineKeyRequest{Label: label})
+	res, err := unary(ctx, a, newClients(cfg, a.userAgent()).Identity.MintMachineKey, &sockv1.MintMachineKeyRequest{Label: label})
 	if err != nil {
 		warnf(stderr, "no machine key kept (%v); %s", client.Describe(err), finish)
 		return
 	}
-	if err := config.SetMachineKey(a.ConfigPath, res.GetToken(), cfg.URL, cfg.AccessGate, false); err != nil {
+	if err := config.SetMachineKey(a.ConfigPath, res.GetToken(), cfg.URL, cfg.AccessGate, replace); err != nil {
 		warnf(stderr, "no machine key kept (%v); %s", err, finish)
+		return
+	}
+	if replace {
+		warn(stderr, "replaced a machine key the server no longer accepts")
 		return
 	}
 	warnf(stderr, "kept a machine key for %s: each project you open gets its own puppet", label)
