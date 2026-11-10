@@ -76,8 +76,10 @@ type Server struct {
 	Conversations []*sockv1.Conversation
 	Pending       []*sockv1.Message
 	Acked         []string
-	Sent          []Sent
-	UserAgents    []string
+	// Released records each Release: the ids and retry_after_seconds.
+	Released   []Released
+	Sent       []Sent
+	UserAgents []string
 	// SendErrs are returned, front first, by NotifyOwner and Send before
 	// they start succeeding.
 	SendErrs []error
@@ -379,4 +381,28 @@ func (s *Server) Snapshot() (sent []Sent, acked []string, userAgents []string, s
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.Sent), slices.Clone(s.Acked), slices.Clone(s.UserAgents), s.Subscribes
+}
+
+// Released is one Release call.
+type Released struct {
+	IDs        []string
+	RetryAfter int32
+}
+
+// Release records the call; a human's is refused, as the hub refuses it.
+func (s *Server) Release(_ context.Context, req *connect.Request[sockv1.ReleaseRequest]) (*connect.Response[sockv1.ReleaseResponse], error) {
+	if req.Header().Get("Authorization") != "Bearer "+Token {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("puppet tokens only"))
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Released = append(s.Released, Released{IDs: req.Msg.GetMessageIds(), RetryAfter: req.Msg.GetRetryAfterSeconds()})
+	return connect.NewResponse(&sockv1.ReleaseResponse{}), nil
+}
+
+// ReleasedCalls returns the Release calls so far.
+func (s *Server) ReleasedCalls() []Released {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.Released)
 }

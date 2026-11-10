@@ -1155,3 +1155,71 @@ func TestListenHonorsALongRetryAfter(t *testing.T) {
 		t.Fatalf("waits %v, want [10m0s]", w)
 	}
 }
+
+// A puppet listener that gives up on a message gives it back to the hub for
+// a minute (contract puppet-inbound.md) instead of holding it on its stream,
+// where nothing would hand it out again until a reconnect.
+func TestListenReleasesAMessageItGaveUpOn(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{{
+		Events: []*sockv1.SubscribeResponse{
+			socktest.Event(socktest.Text("m-fail", "c-1", 1, "bad")),
+			socktest.Event(socktest.Text("m-ok", "c-1", 2, "good")),
+		},
+		Hold: true,
+	}}
+	app := testApp(t, srv)
+	app.RunExec = func(_ context.Context, _ string, stdin []byte, _ []string, _, _ io.Writer) error {
+		if strings.Contains(string(stdin), "m-fail") {
+			return errors.New("exit status 1")
+		}
+		return nil
+	}
+	recordSleeps(&app.Sleep)
+	acked := ackedCount(srv)
+	_, errOut, err := listenUntil(t, app, func() bool { return acked() == 1 }, "--exec", "handle-it")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	got := srv.ReleasedCalls()
+	if len(got) != 1 || !slices.Equal(got[0].IDs, []string{"m-fail"}) || got[0].RetryAfter != 60 {
+		t.Fatalf("released %+v, want m-fail for 60s", got)
+	}
+	if !strings.Contains(errOut, "released") {
+		t.Fatalf("stderr %q does not say the message was released", errOut)
+	}
+}
+
+// A human's listener has no lease to give back: Release is a puppet's.
+func TestHumanListenDoesNotRelease(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{{
+		Events: []*sockv1.SubscribeResponse{
+			socktest.Event(socktest.Text("m-fail", "c-1", 1, "bad")),
+			socktest.Event(socktest.Text("m-ok", "c-1", 2, "good")),
+		},
+		Hold: true,
+	}}
+	app := testApp(t, srv)
+	get := app.Getenv
+	app.Getenv = func(k string) string {
+		if k == "SOCK_TOKEN" {
+			return socktest.HumanToken
+		}
+		return get(k)
+	}
+	app.RunExec = func(_ context.Context, _ string, stdin []byte, _ []string, _, _ io.Writer) error {
+		if strings.Contains(string(stdin), "m-fail") {
+			return errors.New("exit status 1")
+		}
+		return nil
+	}
+	recordSleeps(&app.Sleep)
+	acked := ackedCount(srv)
+	if _, _, err := listenUntil(t, app, func() bool { return acked() == 1 }, "--exec", "handle-it"); err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if got := srv.ReleasedCalls(); len(got) != 0 {
+		t.Fatalf("human listener released %+v", got)
+	}
+}

@@ -52,7 +52,7 @@ func newListenCmd(app *App) *cobra.Command {
 		Use:   "listen",
 		Short: "Stream messages as they arrive and acknowledge each one",
 		Long: "Stream pending and new messages. Each is printed (or passed to --exec on stdin as JSON) and then acknowledged. " +
-			"With --exec, a message is acknowledged only if the command exits 0; a failing command is retried up to 5 times with backoff, then the message stays pending for the next connection. Delivery is at-least-once, so the command may see a message twice.",
+			"With --exec, a message is acknowledged only if the command exits 0; a failing command is retried up to 5 times with backoff, then the message is given back to the hub for a minute (as a puppet) or stays pending for the next connection (as you). Delivery is at-least-once, so the command may see a message twice.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if project != "" && !asPuppet {
@@ -81,6 +81,7 @@ func newListenCmd(app *App) *cobra.Command {
 			// runner's owner gate and a Codex agent's sock-mcp need it. A human
 			// session token never goes: a prompt-injected child could print it.
 			if client.TokenKind(app.token) == client.KindPuppet {
+				l.puppet = true
 				l.childEnv = []string{"SOCK_TOKEN=" + app.token, "SOCK_URL=" + app.url}
 			}
 			return l.Run(cmd.Context())
@@ -102,6 +103,9 @@ type listener struct {
 	errOut  io.Writer
 	// childEnv is the listener's own puppet credential, for the --exec child.
 	childEnv []string
+	// puppet: the listener holds a puppet token, so the hub leases it what it
+	// is sent and a message it gives up on is released, not left held.
+	puppet bool
 }
 
 // logf writes a diagnostic line. A failing stderr has no recovery path.
@@ -209,16 +213,35 @@ func (l *listener) handle(ctx context.Context, m *sockv1.Message) error {
 		}
 		env = append(env, l.childEnv...)
 		if err := l.runExec(ctx, m.GetId(), payload, env); err != nil {
-			return fmt.Errorf("--exec failed: %w (not acked)", err)
+			return fmt.Errorf("--exec failed: %w (not acked%s)", err, l.release(ctx, m.GetId()))
 		}
 	}
 	return ack(ctx, l.app, l.clients, []string{m.GetId()})
 }
 
+// releaseRetry is how long a puppet listener's given-up message waits at
+// the hub before any consumer, this one included, is handed it again.
+const releaseRetry = 60
+
+// release gives a message the --exec gave up on back to the hub (contract
+// puppet-inbound.md): a puppet stream holds what it is sent until it ends,
+// so without this the message waits for a reconnect. It returns the note
+// for the log line. A human listener has no lease to give back.
+func (l *listener) release(ctx context.Context, id string) string {
+	if !l.puppet || ctx.Err() != nil {
+		return ""
+	}
+	req := connect.NewRequest(&sockv1.ReleaseRequest{MessageIds: []string{id}, RetryAfterSeconds: releaseRetry})
+	if _, err := l.clients.Messaging.Release(ctx, req); err != nil {
+		return fmt.Sprintf("; release failed, it returns when this stream ends: %v", err)
+	}
+	return fmt.Sprintf("; released, back in %ds", releaseRetry)
+}
+
 // runExec runs the --exec command, retrying a failure up to execAttempts
 // times with the reconnect backoff. Messages are handled in order, so a
-// message that still fails holds the stream for the retries and is then left
-// pending; it comes back on the next connection.
+// message that still fails holds the stream for the retries; then a puppet
+// listener releases it and a human's leaves it for the next connection.
 func (l *listener) runExec(ctx context.Context, id string, payload []byte, env []string) error {
 	backoff := reconnectBase
 	for attempt := 1; ; attempt++ {
