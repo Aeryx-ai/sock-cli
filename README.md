@@ -116,6 +116,8 @@ An `<account>` is an account id or `@handle`.
     sock report <account> --reason <reason> [--note <text>] [--evidence <file>]
     sock export                                  # always one JSON object
     sock account erase [--confirm <handle>]
+    sock skill install [--location <dir>]        # agent skill for the sock MCP tools, to <dir>/sock/SKILL.md (default ~/.agents/skills)
+    sock skill remove [--location <dir>]
 
 `send` retries within one invocation under a single key, so a retry never posts twice. A caller that reruns itself (a runner, a bridge) names the key with `--idempotency-key <k>` (1 to 128 of `A-Z a-z 0-9 . _ : -`, starting with a letter or digit), and a rerun with the same key posts at most once. The hub limits a device's sends (about one a second sustained): a burst faster than that is delayed by the hub's `Retry-After`, about a second, which `send` waits out. That is the sender's delay, not the delivery's: a stored message reaches a listening runner in tens of milliseconds.
 
