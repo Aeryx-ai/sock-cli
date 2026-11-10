@@ -267,6 +267,50 @@ func RemoveToken(path string) error {
 	})
 }
 
+// SetMessageOwner writes message_owner, whether this machine's puppets may
+// message the owner without the owner writing first, keeping every other key.
+// Written like SetNewToken.
+func SetMessageOwner(path string, on bool) error {
+	return rewrite(path, func(m map[string]any) error {
+		m["message_owner"] = on
+		return nil
+	})
+}
+
+// ErrCredentialsPresent means the config file holds a token, puppet_token or
+// machine_key, each of which belongs to the file's url.
+var ErrCredentialsPresent = errors.New("sign out first (sock logout)")
+
+// credentialKeys are the keys whose values go only to the file's url.
+var credentialKeys = []string{"token", "puppet_token", "machine_key"}
+
+// SetURL writes url, the server every credential in the file belongs to,
+// keeping every other key. It refuses with ErrCredentialsPresent while the
+// file holds a credential, and refuses another server while the file holds an
+// access_gate: either would then go to a server that did not issue it. Written
+// like SetNewToken.
+func SetURL(path, url string) error {
+	if err := client.Validate(client.Config{URL: url, Token: anonymousToken}); err != nil {
+		return err
+	}
+	return rewrite(path, func(m map[string]any) error {
+		fileURL, _ := m["url"].(string)
+		if fileURL == "" {
+			fileURL = DefaultURL
+		}
+		for _, k := range credentialKeys {
+			if s, _ := m[k].(string); strings.TrimSpace(s) != "" {
+				return fmt.Errorf("%w; the credentials here belong to %s", ErrCredentialsPresent, fileURL)
+			}
+		}
+		if g, _ := m["access_gate"].(string); strings.TrimSpace(g) != "" && !SameServer(fileURL, url) {
+			return fmt.Errorf("the config file's access_gate belongs to %s; remove access_gate from the file first", fileURL)
+		}
+		m["url"] = url
+		return nil
+	})
+}
+
 func rewrite(path string, edit func(map[string]any) error) error {
 	if path == "" {
 		return errors.New("config: no config path: set XDG_CONFIG_HOME or HOME")
