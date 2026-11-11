@@ -46,7 +46,7 @@ func newSkillCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			path, err := installSkill(d)
+			path, err := installSkill(d, skillMD)
 			if err != nil {
 				return err
 			}
@@ -79,30 +79,12 @@ func newSkillCmd() *cobra.Command {
 	return cmd
 }
 
-// installSkill writes SKILL.md into dir through a temporary file and a
-// rename, so a reader never sees half a skill.
-func installSkill(dir string) (string, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("install skill: %w", err)
-	}
-	f, err := os.CreateTemp(dir, ".SKILL.md.*")
-	if err != nil {
-		return "", fmt.Errorf("install skill: %w", err)
-	}
-	defer func() { _ = os.Remove(f.Name()) }() // no-op after the rename
-	_, werr := f.WriteString(skillMD)
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr == nil {
-		werr = os.Chmod(f.Name(), 0o644)
-	}
+// installSkill writes content to dir/SKILL.md, so a reader never sees half
+// a skill.
+func installSkill(dir, content string) (string, error) {
 	path := filepath.Join(dir, "SKILL.md")
-	if werr == nil {
-		werr = os.Rename(f.Name(), path)
-	}
-	if werr != nil {
-		return "", fmt.Errorf("install skill: %w", werr)
+	if err := writeFileAtomic(path, content, 0o644); err != nil {
+		return "", fmt.Errorf("install skill: %w", err)
 	}
 	return path, nil
 }

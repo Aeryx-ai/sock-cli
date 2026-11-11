@@ -3,7 +3,7 @@ LDFLAGS := -X main.version=$(VERSION)
 GO_LICENSES := go run github.com/google/go-licenses/v2@v2.0.1
 
 .DEFAULT_GOAL := build
-.PHONY: build test install redeploy check lint fmt vet tidy licenses e2e-selfreg dist
+.PHONY: build test install redeploy check lint fmt vet tidy licenses e2e-selfreg dist agent-assets
 
 # go.mod pins sock-contract and sock-client by tag; the Go proxy fetches
 # them. To build against local checkouts instead, use an untracked go.work
@@ -39,6 +39,17 @@ tidy:
 	GOWORK=off go mod tidy -diff
 
 check: tidy fmt vet lint licenses test
+
+# agent-assets refreshes the runner and skill sock agent install embeds from
+# the sock-integrations checkout's HEAD and records that commit; the files must
+# be committed there first. TestAgentAssetsMatchIntegrations checks the copies.
+INTEGRATIONS ?= ../integrations
+AGENT_ASSETS := runner/sock-runner runner/lib.sh agents/skills/sock/SKILL.md
+
+agent-assets:
+	git -C $(INTEGRATIONS) diff --quiet HEAD -- $(AGENT_ASSETS) || { echo "commit $(AGENT_ASSETS) in $(INTEGRATIONS) first"; exit 1; }
+	for p in $(AGENT_ASSETS); do git -C $(INTEGRATIONS) show HEAD:$$p > internal/cli/agent/$$(basename $$p) || exit 1; done
+	git -C $(INTEGRATIONS) rev-parse HEAD > internal/cli/agent/SOURCE
 
 # Unattended self-registration test against a local Sock dev hub.
 # Not part of check: it needs the hub, Docker and a sock-mcp.

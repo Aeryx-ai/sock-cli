@@ -1,0 +1,230 @@
+#!/bin/bash
+# sock-runner: the command `sock listen --exec` runs once per message. It
+# resumes an agent's session headlessly with the owner's message as the prompt
+# (docs/specs/integrations.md, "Headless inbound: sock-runner").
+#
+# Exit 0 acknowledges the message (it ran, or it was dropped as not the
+# owner's or malformed). Exit 1 leaves it pending for a retry. Exit 2 is a bad
+# configuration: nothing ran and the message stays pending.
+#
+# Needs jq. The message text reaches the agent on stdin only: never in argv,
+# the environment, a log or a file other than the private prompt file.
+# shellcheck source-path=SCRIPTDIR
+# shellcheck disable=SC2034,SC2154 # the settings lib.sh reads, and what it sets
+set -u
+umask 077
+
+cmd_name=sock-runner
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=lib.sh
+. "$here/lib.sh"
+
+# --- configuration -----------------------------------------------------------
+runner_config
+
+timeout=${SOCK_RUNNER_TIMEOUT:-900}
+case $timeout in
+'' | *[!0-9]* | 0) timeout=900 ;;
+esac
+
+state_dir=${SOCK_RUNNER_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/sock-integrations}
+log_name=runner.log
+lock_name=runner.lock
+ledger_name=done.ids
+lib_init
+
+# --- cleanup: the agent's group first, then the library's (lock, prompt file) --
+agent_pgid=
+watchdog_pgid=
+activity_pid=
+# shellcheck disable=SC2329 # run by the library's EXIT trap
+extra_cleanup() {
+	if [ -n "$agent_pgid" ]; then
+		# terminated while the agent runs: take its whole group down, TERM then
+		# KILL, before the watchdog that would bound a SIGKILL of this runner goes
+		kill -TERM -- "-$agent_pgid" 2>/dev/null
+		for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+			kill -0 -- "-$agent_pgid" 2>/dev/null || break
+			sleep 0.2
+		done
+		kill -KILL -- "-$agent_pgid" 2>/dev/null
+	fi
+	[ -n "$watchdog_pgid" ] && kill -KILL -- "-$watchdog_pgid" 2>/dev/null
+	[ -n "$prompt" ] && rm -f "$prompt.err"
+	if [ -n "$activity_pid" ]; then
+		kill "$activity_pid" 2>/dev/null
+		# detached: the owner's client also drops working at its TTL
+		(activity idle &) 2>/dev/null
+	fi
+}
+install_traps
+
+read_message
+owner_gate
+drop_if_done
+
+# --- the owner sees the agent working, before the lock wait and the run ------
+# sock activity (sock.v1 SetActivity) marks the puppet working in the
+# conversation for 30 s; the loop refreshes it every 10 s until the run ends,
+# and cleanup sets idle. A failing call (an older sock, the hub down) changes
+# nothing: it is a hint, never part of the outcome.
+activity() { sock activity --conversation "$stdin_conv" "$1" >/dev/null 2>&1; }
+(
+	while :; do
+		activity working
+		sleep 10
+	done
+) </dev/null >/dev/null 2>&1 &
+activity_pid=$!
+
+take_lock
+drop_if_done
+write_prompt
+
+# The sock tools a headless claude may call without anyone to approve them:
+# without these the reply path is denied under every mode but bypassPermissions.
+# A plugin's MCP tool is mcp__plugin_<plugin>_<server>__<tool>, characters
+# outside A-Za-z0-9_- replaced with _ (code.claude.com/docs/en/mcp, "Plugin MCP
+# tool names"): plugin sock, server sock. test/runner_fixes_test.go guards it.
+claude_tools=mcp__plugin_sock_sock__sock_whoami,mcp__plugin_sock_sock__sock_list_conversations,mcp__plugin_sock_sock__sock_send
+# the other two sock tools consume the deliveries `sock listen` owns (spec rule
+# 2): denied even under bypassPermissions
+claude_denied=mcp__plugin_sock_sock__sock_fetch,mcp__plugin_sock_sock__sock_ack
+
+# --- the agent, in its own process group, with a timeout ---------------------
+# Listen variables and the runner's own settings never reach the agent. For
+# claude the token goes too: the plugin's sock-mcp has its own configuration
+# and the agent's shell tool must not read the runner's. Codex's sock-mcp is
+# given SOCK_TOKEN and SOCK_URL from the environment (codex/config.toml).
+scrub=
+for n in $(env | sed -n 's/^\(SOCK_RUNNER_[A-Za-z0-9_]*\)=.*/\1/p') SOCK_MESSAGE_ID SOCK_CONVERSATION_ID SOCK_SENDER_ID; do
+	scrub="$scrub -u $n"
+done
+if [ "$agent" = claude ]; then scrub="$scrub -u SOCK_TOKEN -u SOCK_URL"; fi
+# SOCK_HEADLESS keeps the agent's notify.sh hooks quiet: the run answers the
+# owner with sock_send, and a resumed Codex session keeps the TUI's source.
+
+# --- the runner's own session: resumed when stored, else made ----------------
+# The file holds one lowercase uuid; anything else is replaced, never passed
+# to claude. Read and written under the lock, so two runs never make two.
+session_file=$state_dir/session
+session_flag=--resume
+new_session() {
+	session=$(uuidgen | tr '[:upper:]' '[:lower:]')
+	is_uuid "$session" || {
+		log_line "session id failed"
+		exit 1
+	}
+	if ! { printf '%s\n' "$session" >"$session_file.tmp" && mv -f "$session_file.tmp" "$session_file"; }; then
+		log_line "session not writable"
+		exit 1
+	fi
+	session_flag=--session-id
+}
+if [ -n "$own_session" ]; then
+	session=$(head -n 1 "$session_file" 2>/dev/null | head -c 64)
+	is_uuid "$session" || new_session
+fi
+
+cd "$workdir" || {
+	log_line "agent exit 71"
+	exit 1
+}
+
+# run_agent starts the agent in its own process group under the watchdog and
+# sets code. claude's stderr goes to a private file beside the prompt, read
+# only for the missing-session error and removed with the prompt; never logged.
+run_agent() {
+	set -m
+	# shellcheck disable=SC2086 # $scrub is a list of -u NAME pairs
+	case $agent in
+	claude) env $scrub SOCK_HEADLESS=1 claude -p "$session_flag" "$session" --permission-mode "$mode" ${model:+--model} ${model:+"$model"} --allowedTools "$claude_tools" --disallowedTools "$claude_denied" --permission-prompts none <"$prompt" >/dev/null 2>"$prompt.err" & ;;
+	codex) env $scrub SOCK_HEADLESS=1 codex exec --sandbox "$mode" ${model:+-m} ${model:+"$model"} resume "$session" - <"$prompt" >/dev/null 2>/dev/null & ;;
+	esac
+	agent_pgid=$!
+	# the lock wait counted against the timeout: the run gets what take_lock left
+	left=$((deadline - $(now)))
+	[ "$left" -gt 0 ] || left=1
+	(
+		sleep "$left"
+		# an agent whose group is gone finished before the deadline: no timeout
+		kill -0 -- "-$agent_pgid" 2>/dev/null || exit 0
+		: >"$prompt.timeout"
+		kill -TERM -- "-$agent_pgid" 2>/dev/null
+		sleep 5
+		kill -KILL -- "-$agent_pgid" 2>/dev/null
+	) >/dev/null 2>&1 &
+	watchdog_pgid=$!
+	wait "$agent_pgid"
+	code=$?
+	agent_pgid=
+	kill -KILL -- "-$watchdog_pgid" 2>/dev/null
+	# reap it here, so a shell that announces a killed job does so into /dev/null
+	{ wait "$watchdog_pgid"; } 2>/dev/null
+	watchdog_pgid=
+	set +m
+}
+# whole seconds, rounded down: a reply at or after the start counts
+run_start=$(date +%s)
+run_agent
+
+# a stored session claude no longer has: nothing ran, so the message runs once
+# more in a new session, within what is left of the timeout
+if [ -n "$own_session" ] && [ "$session_flag" = --resume ] && [ "$code" -ne 0 ] && [ ! -e "$prompt.timeout" ] &&
+	grep -q 'No conversation found with session ID' "$prompt.err" 2>/dev/null; then
+	log_line "session gone"
+	new_session
+	run_agent
+fi
+
+# --- did the reply post? ------------------------------------------------------
+# The agent's own exit status cannot say: a model that never calls sock_send
+# exits 0, and one that posted and then failed or timed out exits nonzero.
+# sock-mcp records each post that went out; `sock-mcp replied` exits 0 when
+# one went to this conversation since the run started, 1 when none did, and
+# anything else (an older sock-mcp, none on PATH) when it cannot say.
+replied=unknown
+if command -v sock-mcp >/dev/null 2>&1; then
+	sock-mcp replied --conversation "$stdin_conv" --since "$run_start" >/dev/null 2>&1
+	case $? in
+	0) replied=yes ;;
+	1) replied=no ;;
+	esac
+fi
+
+finish() {
+	record_done
+	log_line "$1"
+	exit 0
+}
+# A reply posted is the work done, whatever happened after it: a retry would
+# post a second one.
+if [ "$replied" = yes ]; then
+	if [ -e "$prompt.timeout" ]; then finish "replied, timeout"; fi
+	if [ "$code" -ne 0 ]; then finish "replied, agent exit $code"; fi
+	finish "ran"
+fi
+# a timeout first: an agent that exits 0 on the watchdog's TERM did not finish
+if [ -e "$prompt.timeout" ]; then
+	log_line "timeout"
+	exit 1
+fi
+if [ "$code" -eq 0 ] && [ "$replied" = unknown ]; then finish "ran"; fi
+if [ "$code" -eq 0 ]; then
+	# Two runs that end without a reply and the message is given up on, so a
+	# model that will not answer costs two runs, not every retry sock listen has.
+	tries_file=$state_dir/noreply.ids
+	tries=$(grep -cxF "$stdin_id" "$tries_file" 2>/dev/null)
+	if [ "${tries:-0}" -ge 1 ]; then
+		finish "no reply after 2 runs"
+	fi
+	{
+		printf '%s\n' "$stdin_id" >>"$tries_file"
+		tail -n 200 "$tries_file" >"$tries_file.tmp" && mv "$tries_file.tmp" "$tries_file"
+	} 2>/dev/null || true
+	log_line "agent exited 0 without replying"
+	exit 1
+fi
+# the status only: its stderr can echo the owner's text, its output or a secret
+log_line "agent exit $code"
+exit 1

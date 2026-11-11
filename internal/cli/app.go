@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -53,6 +54,11 @@ type App struct {
 	LoginTimeout time.Duration
 	// EnsureTimeout bounds puppets ensure. Zero means defaultEnsureTimeout.
 	EnsureTimeout time.Duration
+	// OS picks the service manager sock agent uses (runtime.GOOS).
+	OS string
+	// RunCmd runs launchctl, systemctl, loginctl and the runner's
+	// configuration check for sock agent; env nil inherits sock's.
+	RunCmd func(ctx context.Context, env []string, name string, args ...string) ([]byte, error)
 
 	flagURL   string
 	flagToken string
@@ -84,6 +90,8 @@ func DefaultApp(version string) *App {
 		RunExec:     runShell,
 		OpenBrowser: openBrowser,
 		Hostname:    os.Hostname,
+		OS:          runtime.GOOS,
+		RunCmd:      runCommand,
 	}
 }
 
@@ -174,7 +182,7 @@ func NewRoot(app *App) *cobra.Command {
 		newDevicesCmd(app), newPuppetsCmd(app), newMachineKeyCmd(app),
 		newConversationsCmd(app), newSendCmd(app), newListenCmd(app), newFetchCmd(app), newAckCmd(app),
 		newBlockCmd(app), newUnblockCmd(app), newBlocksCmd(app), newReportCmd(app), newExportCmd(app),
-		newSettingsCmd(app), newSkillCmd())
+		newSettingsCmd(app), newSkillCmd(), newAgentCmd(app))
 	return root
 }
 
