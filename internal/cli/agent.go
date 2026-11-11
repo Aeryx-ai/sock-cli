@@ -37,9 +37,9 @@ var (
 	runnerFiles = map[string]string{"sock-runner": runnerScript, "lib.sh": runnerLib}
 )
 
-// agentSkillMarker is in every skill sock agent install writes: a file at the
-// skill's path holding it is sock's to replace.
-const agentSkillMarker = "<!-- written by sock; sock agent install replaces this file -->"
+// agentSkillMarker is in every skill sock agent install writes: it replaces
+// a file at the skill's path only while that file holds it.
+const agentSkillMarker = "<!-- written by sock; sock agent install replaces this file while this line is present -->"
 
 type serviceKind int
 
@@ -101,8 +101,63 @@ type agentHost struct {
 	state                        string
 }
 
+// agentHost is the service of the project directory projectFlag names, which
+// must exist.
 func (a *App) agentHost(projectFlag string) (agentHost, error) {
-	h := agentHost{home: a.Getenv("HOME")}
+	abs, err := filepath.Abs(orDefault(projectFlag, "."))
+	if err == nil {
+		abs, err = filepath.EvalSymlinks(abs)
+	}
+	if err != nil {
+		return agentHost{}, fmt.Errorf("project: %w", err)
+	}
+	if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
+		return agentHost{}, fmt.Errorf("%s is not a directory", abs)
+	}
+	return a.hostFor(abs)
+}
+
+// uninstallHosts are the services projectFlag may have, found without the
+// directory existing: its physical path (the longest existing prefix with
+// symlinks resolved) and, when that differs, the path as given.
+func (a *App) uninstallHosts(projectFlag string) ([]agentHost, error) {
+	abs, err := filepath.Abs(orDefault(projectFlag, "."))
+	if err != nil {
+		return nil, fmt.Errorf("project: %w", err)
+	}
+	paths := []string{physicalPath(abs)}
+	if paths[0] != abs {
+		paths = append(paths, abs)
+	}
+	var hosts []agentHost
+	for _, p := range paths {
+		h, err := a.hostFor(p)
+		if err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, h)
+	}
+	return hosts, nil
+}
+
+// physicalPath resolves symlinks in the longest prefix of the absolute path p
+// that exists, and keeps the rest as it is.
+func physicalPath(p string) string {
+	rest := ""
+	for dir := p; ; dir = filepath.Dir(dir) {
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(r, rest)
+		}
+		if dir == filepath.Dir(dir) {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+	}
+}
+
+// hostFor is where the service of the physical project path lives.
+func (a *App) hostFor(project string) (agentHost, error) {
+	h := agentHost{home: a.Getenv("HOME"), project: project}
 	if h.home == "" {
 		return h, errors.New("HOME is not set")
 	}
@@ -113,20 +168,6 @@ func (a *App) agentHost(projectFlag string) (agentHost, error) {
 		h.kind = systemd
 	default:
 		return h, fmt.Errorf("no service manager for %s: run sock listen --as-puppet --exec <sock-runner> yourself", a.OS)
-	}
-	dir := projectFlag
-	if dir == "" {
-		dir = "."
-	}
-	abs, err := filepath.Abs(dir)
-	if err == nil {
-		h.project, err = filepath.EvalSymlinks(abs)
-	}
-	if err != nil {
-		return h, fmt.Errorf("project: %w", err)
-	}
-	if fi, err := os.Stat(h.project); err != nil || !fi.IsDir() {
-		return h, fmt.Errorf("%s is not a directory", h.project)
 	}
 	if !safePath.MatchString(h.project) {
 		return h, fmt.Errorf("the project path may hold only A-Z a-z 0-9 . _ / @ + -: %s", h.project)
@@ -146,9 +187,10 @@ func (a *App) agentHost(projectFlag string) (agentHost, error) {
 	return h, nil
 }
 
-// xdg is the XDG base directory env names, else home/fallback.
+// xdg is the XDG base directory env names, else home/fallback. A relative
+// one is invalid under the XDG spec and ignored.
 func (a *App) xdg(env, home, fallback string) string {
-	if d := a.Getenv(env); d != "" {
+	if d := a.Getenv(env); filepath.IsAbs(d) {
 		return d
 	}
 	return filepath.Join(home, fallback)
@@ -205,27 +247,28 @@ func newAgentCmd(app *App) *cobra.Command {
 		},
 	}, &cobra.Command{
 		Use:   "uninstall",
-		Short: "Stop and remove the project's runner service",
+		Short: "Stop and remove the project's runner service; the project directory need not exist",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			h, err := app.agentHost(project)
+			hosts, err := app.uninstallHosts(project)
 			if err != nil {
 				return err
 			}
-			if h.kind == launchd {
-				_, _ = app.RunCmd(cmd.Context(), nil, "launchctl", "bootout", h.service) // none loaded is fine
-			} else {
-				_, _ = app.RunCmd(cmd.Context(), nil, "systemctl", "--user", "disable", "--now", h.label)
-			}
-			if err := os.Remove(h.unit); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return fmt.Errorf("remove %s: %w", h.unit, err)
-			}
-			if h.kind == systemd {
-				if err := app.runCmd(cmd.Context(), "systemctl", "--user", "daemon-reload"); err != nil {
+			w := cmd.OutOrStdout()
+			removed := false
+			for _, h := range hosts {
+				if _, err := os.Lstat(h.unit); errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
+				if err := app.agentUninstall(cmd.Context(), h); err != nil {
 					return err
 				}
+				removed = true
+				_, _ = fmt.Fprintf(w, "removed %s\n", h.label)
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", h.label)
+			if !removed {
+				_, err = fmt.Fprintf(w, "no runner service installed for %s\n", hosts[0].project)
+			}
 			return err
 		},
 	}, &cobra.Command{
@@ -257,6 +300,21 @@ func newAgentCmd(app *App) *cobra.Command {
 	return cmd
 }
 
+func (a *App) agentUninstall(ctx context.Context, h agentHost) error {
+	if h.kind == launchd {
+		_, _ = a.RunCmd(ctx, nil, "launchctl", "bootout", h.service) // none loaded is fine
+	} else {
+		_, _ = a.RunCmd(ctx, nil, "systemctl", "--user", "disable", "--now", h.label)
+	}
+	if err := os.Remove(h.unit); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", h.unit, err)
+	}
+	if h.kind == systemd {
+		return a.runCmd(ctx, "systemctl", "--user", "daemon-reload")
+	}
+	return nil
+}
+
 func (a *App) agentInstall(ctx context.Context, h agentHost, w io.Writer) error {
 	sockBin, err := exec.LookPath("sock")
 	if err == nil {
@@ -272,6 +330,13 @@ func (a *App) agentInstall(ctx context.Context, h agentHost, w io.Writer) error 
 	for _, n := range []string{"SOCK_RUNNER_SESSION", "SOCK_RUNNER_MODEL", "SOCK_RUNNER_TIMEOUT", "SOCK_RUNNER_ALLOW_BYPASS"} {
 		if v := a.Getenv(n); v != "" {
 			env = append(env, n+"="+v)
+		}
+	}
+	// the unit runs in the project, and jq runs before the owner gate: an
+	// entry resolved against the working directory would run the project's files
+	for _, e := range strings.Split(a.Getenv("PATH"), ":") {
+		if !filepath.IsAbs(e) {
+			return fmt.Errorf("PATH entry %q is not an absolute directory: the service runs in the project, where it would run the project's files; remove it from PATH and rerun", e)
 		}
 	}
 	for _, p := range []string{sockBin, data} {
@@ -332,14 +397,21 @@ func (a *App) agentInstall(ctx context.Context, h agentHost, w io.Writer) error 
 		if err := a.runCmd(ctx, "loginctl", "enable-linger", name); err != nil {
 			_, _ = fmt.Fprintf(w, "linger: could not enable it, so the service stops when you log out; run: loginctl enable-linger %s\n", name)
 		} else {
-			_, _ = fmt.Fprintf(w, "linger: enabled for %s, so the service runs without a login\n", name)
+			_, _ = fmt.Fprintf(w, "linger: linger is on for %s, so your user services run without a login; sock agent uninstall leaves it on (loginctl disable-linger %s turns it off)\n", name, name)
 		}
 	}
 
 	dir := filepath.Join(h.home, ".agents", "skills", skillName)
 	path := filepath.Join(dir, "SKILL.md")
-	if old, err := os.ReadFile(path); err == nil && string(old) != skillMD && !strings.Contains(string(old), agentSkillMarker) {
-		_, err = fmt.Fprintf(w, "skill:  left %s alone: not written by sock\n", path)
+	// a symlink could point the write anywhere: never follow one
+	for _, p := range []string{filepath.Dir(dir), dir, path} {
+		if fi, err := os.Lstat(p); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+			_, err = fmt.Fprintf(w, "skill:  left %s alone: %s is a symlink\n", path, p)
+			return err
+		}
+	}
+	if old, err := os.ReadFile(path); err == nil && !strings.Contains(string(old), agentSkillMarker) {
+		_, err = fmt.Fprintf(w, "skill:  left %s alone: not written by sock agent install\n", path)
 		return err
 	}
 	if _, err := installSkill(dir, agentSkillMD); err != nil {

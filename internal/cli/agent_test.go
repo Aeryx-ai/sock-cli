@@ -259,7 +259,7 @@ func TestAgentInstallSystemdEnablesLinger(t *testing.T) {
 	if b, err := os.ReadFile(unit); err != nil || !strings.HasPrefix(string(b), "[Unit]\n") {
 		t.Fatalf("unit %v", err)
 	}
-	for _, want := range []string{unit, "systemctl --user status " + label, "linger"} {
+	for _, want := range []string{unit, "systemctl --user status " + label, "linger is on for guy", "sock agent uninstall leaves it on"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -364,35 +364,137 @@ func TestAgentStatus(t *testing.T) {
 }
 
 func TestAgentInstallReplacesSkillSockWrote(t *testing.T) {
-	for name, old := range map[string]string{
-		"older agent skill":  "---\nname: sock\n---\n" + agentSkillMarker + "\nold\n",
-		"sock skill install": skillMD,
-	} {
+	h := newFakeHost(t)
+	writeFile(t, h.skillPath(), "---\nname: sock\n---\n"+agentSkillMarker+"\nold\n")
+	if _, _, err := run(t, h.app("darwin"), nil, "agent", "install", "--project", h.project); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if got, _ := os.ReadFile(h.skillPath()); string(got) != agentSkillMD {
+		t.Fatal("skill sock agent install wrote not replaced")
+	}
+}
+
+// Only a file holding agent install's own marker is replaced: not another
+// skill, and not the one sock skill install writes to the same path.
+func TestAgentInstallKeepsOtherSkills(t *testing.T) {
+	for name, old := range map[string]string{"foreign": "mine\n", "sock skill install": skillMD} {
 		t.Run(name, func(t *testing.T) {
 			h := newFakeHost(t)
 			writeFile(t, h.skillPath(), old)
-			if _, _, err := run(t, h.app("darwin"), nil, "agent", "install", "--project", h.project); err != nil {
+			out, _, err := run(t, h.app("darwin"), nil, "agent", "install", "--project", h.project)
+			if err != nil {
 				t.Fatalf("install: %v", err)
 			}
-			if got, _ := os.ReadFile(h.skillPath()); string(got) != agentSkillMD {
-				t.Fatal("skill sock wrote not replaced")
+			if got, _ := os.ReadFile(h.skillPath()); string(got) != old {
+				t.Fatal("overwrote a skill sock agent install did not write")
+			}
+			if !strings.Contains(out, "not written by sock agent install") {
+				t.Fatalf("output does not say why:\n%s", out)
+			}
+			if _, err := os.Stat(filepath.Join(h.home, "Library", "LaunchAgents", "ai.aeryx.sock-runner."+h.id(t)+".plist")); err != nil {
+				t.Fatalf("unit not installed: %v", err)
 			}
 		})
 	}
 }
 
-func TestAgentInstallKeepsForeignSkill(t *testing.T) {
+// A symlinked skill directory could point the write anywhere: refuse it,
+// still install the unit.
+func TestAgentInstallRefusesSymlinkedSkillDir(t *testing.T) {
+	for _, link := range []string{filepath.Join(".agents", "skills"), filepath.Join(".agents", "skills", "sock"), filepath.Join(".agents", "skills", "sock", "SKILL.md")} {
+		t.Run(link, func(t *testing.T) {
+			h := newFakeHost(t)
+			target := t.TempDir()
+			path := filepath.Join(h.home, link)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+			out, _, err := run(t, h.app("darwin"), nil, "agent", "install", "--project", h.project)
+			if err != nil {
+				t.Fatalf("install: %v", err)
+			}
+			if entries, _ := os.ReadDir(target); len(entries) != 0 {
+				t.Fatalf("wrote through the symlink: %v", entries)
+			}
+			if !strings.Contains(out, "symlink") {
+				t.Fatalf("output does not say why:\n%s", out)
+			}
+		})
+	}
+}
+
+// The unit runs in the project, and jq runs before the owner gate: a PATH
+// entry that resolves against the working directory would run the project's
+// files.
+func TestAgentInstallRefusesRelativePathEntries(t *testing.T) {
+	for i, entry := range []string{"", ".", "bin"} {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			h := newFakeHost(t)
+			h.env["PATH"] = h.bin + ":" + entry + ":/usr/bin"
+			_, _, err := run(t, h.app("darwin"), nil, "agent", "install", "--project", h.project)
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("PATH entry %q", entry)) {
+				t.Fatalf("err %v, want the entry named", err)
+			}
+			if len(h.calls) != 0 {
+				t.Fatalf("ran %v", h.calls)
+			}
+		})
+	}
+}
+
+// XDG base directory spec: a relative path is invalid and is ignored.
+func TestAgentInstallIgnoresRelativeXDG(t *testing.T) {
+	t.Chdir(t.TempDir()) // a regression writes there, not into the repo
 	h := newFakeHost(t)
-	writeFile(t, h.skillPath(), "mine\n")
-	out, _, err := run(t, h.app("darwin"), nil, "agent", "install", "--project", h.project)
-	if err != nil {
+	h.env["XDG_DATA_HOME"] = "data"
+	h.env["XDG_STATE_HOME"] = "state"
+	h.env["XDG_CONFIG_HOME"] = "config"
+	if _, _, err := run(t, h.app("linux"), nil, "agent", "install", "--project", h.project); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if got, _ := os.ReadFile(h.skillPath()); string(got) != "mine\n" {
-		t.Fatal("overwrote a skill sock did not write")
+	for _, p := range []string{
+		filepath.Join(h.home, ".local", "share", "sock", "runner", "1.2.3", "sock-runner"),
+		filepath.Join(h.home, ".local", "state", "sock-integrations", "runner", h.id(t)),
+		filepath.Join(h.home, ".config", "systemd", "user", "sock-runner-"+h.id(t)+".service"),
+	} {
+		if _, err := os.Stat(p); err != nil {
+			t.Error(err)
+		}
 	}
-	if !strings.Contains(out, "not written by sock") {
-		t.Fatalf("output does not say why:\n%s", out)
+}
+
+func TestAgentUninstallAfterProjectDeleted(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux"} {
+		t.Run(goos, func(t *testing.T) {
+			h := newFakeHost(t)
+			h.project = filepath.Join(h.project, "gone")
+			if err := os.Mkdir(h.project, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := run(t, h.app(goos), nil, "agent", "install", "--project", h.project); err != nil {
+				t.Fatalf("install: %v", err)
+			}
+			dir := filepath.Join(h.home, "Library", "LaunchAgents")
+			if goos == "linux" {
+				dir = filepath.Join(h.home, ".config", "systemd", "user")
+			}
+			if err := os.Remove(h.project); err != nil {
+				t.Fatal(err)
+			}
+			out, _, err := run(t, h.app(goos), nil, "agent", "uninstall", "--project", h.project)
+			if err != nil {
+				t.Fatalf("uninstall: %v", err)
+			}
+			if units, _ := os.ReadDir(dir); len(units) != 0 {
+				t.Fatalf("unit left: %v", units)
+			}
+			if !strings.Contains(out, "removed") {
+				t.Fatalf("output %q", out)
+			}
+		})
 	}
 }
 
