@@ -1030,3 +1030,34 @@ func TestLoginKeepsAMachineKeyWrittenDuringTheReplace(t *testing.T) {
 		t.Fatal("the newer machine key was overwritten")
 	}
 }
+
+// A file naming a retired name of the hub is renamed to the hub's current
+// one, its credentials kept: they are the same server's. A SOCK_URL naming it
+// signs in at the current one, whose page the browser then opens.
+func TestLoginRenamesARetiredHub(t *testing.T) {
+	srv := socktest.New(t)
+	const retired = "https://retired.example"
+	was := hubAliases
+	hubAliases = map[string]string{retired: srv.URL}
+	t.Cleanup(func() { hubAliases = was })
+
+	app := humanApp(t, srv, map[string]string{"SOCK_URL": ""})
+	writeConfig(t, app, fmt.Sprintf("url = %q\ntoken = %q\nmachine_key = %q\n", retired, socktest.HumanToken, socktest.MachineKeyToken))
+	srv.Me = socktest.Human()
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil || out != "already signed in as @guy\n" || !strings.Contains(errOut, "sock: renamed the retired server "+retired+" to "+srv.URL+" in the config file\n") {
+		t.Fatalf("login: %v, %q, %q", err, out, errOut)
+	}
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.URL != srv.URL || fc.Token != socktest.HumanToken || fc.MachineKey != socktest.MachineKeyToken {
+		t.Fatalf("config %+v", fc)
+	}
+
+	app = humanApp(t, srv, map[string]string{"SOCK_URL": retired})
+	b := withBrowser(t, app, srv)
+	if _, errOut, err := run(t, app, nil, "login"); err != nil || len(b.opened) != 1 || strings.Contains(errOut, "could not open a browser") {
+		t.Fatalf("login at the retired name: %v, %q", err, errOut)
+	}
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.URL != srv.URL || fc.Token != socktest.HumanToken {
+		t.Fatalf("config %+v", fc)
+	}
+}

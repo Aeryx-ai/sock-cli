@@ -284,6 +284,19 @@ func SwitchServer(path string, checked client.FileConfig) (string, error) {
 	})
 }
 
+// RenameURL rewrites url from old to now, another name of the same server,
+// keeping every credential, while the file still names old; otherwise
+// ErrTokenChanged.
+func RenameURL(path, old, now string) error {
+	return rewrite(path, func(m map[string]any) error {
+		if s, _ := m["url"].(string); s != old {
+			return ErrTokenChanged
+		}
+		m["url"] = now
+		return nil
+	})
+}
+
 // serverConflict says why a credential for url and gate cannot sit in a file
 // naming fileURL and fileGate, or "" when it can.
 func serverConflict(fileURL, fileGate, url, gate string) string {

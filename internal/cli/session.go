@@ -101,13 +101,18 @@ func newRegisterCmd(*App) *cobra.Command {
 // ADR 52), which registers a new person with the ticket it may answer. Then
 // the machine key gets the same check.
 func (a *App) login(cmd *cobra.Command, f signInFlags) error {
+	if a.ConfigPath == "" {
+		return errors.New("no config file path: set HOME or XDG_CONFIG_HOME")
+	}
+	// renamed first, so the file's gate and token load with the file's server
+	if err := a.renameRetiredHub(cmd.ErrOrStderr()); err != nil {
+		return err
+	}
 	cfg, err := a.load(true)
 	if err != nil {
 		return err
 	}
-	if a.ConfigPath == "" {
-		return errors.New("no config file path: set HOME or XDG_CONFIG_HOME")
-	}
+	cfg.URL = currentHub(cfg.URL)
 	if err := a.switchServer(cmd, cfg); err != nil {
 		return err
 	}
@@ -674,6 +679,38 @@ func newLogoutCmd(app *App) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// hubAliases maps a retired name of a hub to its current one, the same
+// backend: credentials for one are good at the other.
+var hubAliases = map[string]string{"https://api.sock.aeryx.ai": config.DefaultURL}
+
+// currentHub is u under its current name.
+func currentHub(u string) string {
+	for old, now := range hubAliases {
+		if config.SameServer(u, old) {
+			return now
+		}
+	}
+	return u
+}
+
+// renameRetiredHub rewrites a config file url naming a retired hub to its
+// current name, keeping the credentials.
+func (a *App) renameRetiredHub(stderr io.Writer) error {
+	fc, err := client.LoadFileConfig(a.ConfigPath)
+	if err != nil {
+		return err
+	}
+	now := currentHub(fc.URL)
+	if now == fc.URL {
+		return nil
+	}
+	if err := config.RenameURL(a.ConfigPath, fc.URL, now); err != nil {
+		return err
+	}
+	warnf(stderr, "renamed the retired server %s to %s in the config file", fc.URL, now)
+	return nil
 }
 
 // openOnHub opens page in the browser only when it is on the hub the
