@@ -50,7 +50,7 @@ type App struct {
 	// Hostname names this machine in the default device label.
 	Hostname func() (string, error)
 	// LoginTimeout bounds the wait for the browser sign-in. Zero means
-	// login.DefaultTimeout.
+	// defaultLoginTimeout.
 	LoginTimeout time.Duration
 	// EnsureTimeout bounds puppets ensure. Zero means defaultEnsureTimeout.
 	EnsureTimeout time.Duration

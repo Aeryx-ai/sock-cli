@@ -42,11 +42,14 @@ const (
 	UserCode      = "BCDF-GHJK"
 )
 
+// SignInTTL is how long the fake's terminal sign-in lasts, the hub's own.
+const SignInTTL = 15 * time.Minute
+
 // StartTerminalSignIn implements the generated handler.
 func (s *Server) StartTerminalSignIn(context.Context, *connect.Request[sockv1.StartTerminalSignInRequest]) (*connect.Response[sockv1.StartTerminalSignInResponse], error) {
 	page := s.URL + "/login"
 	return ok(&sockv1.StartTerminalSignInResponse{TerminalSignIn: TerminalToken, UserCode: UserCode, VerificationUrl: page, VerificationUrlComplete: page + "?code=" + UserCode,
-		ExpiresAt: timestamppb.New(time.Now().Add(10 * time.Minute)), PollInterval: durationpb.New(5 * time.Second)})
+		ExpiresAt: timestamppb.New(time.Now().Add(SignInTTL)), PollInterval: durationpb.New(5 * time.Second)})
 }
 
 // FinishTerminalSignIn implements the generated handler.

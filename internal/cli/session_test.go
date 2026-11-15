@@ -647,6 +647,27 @@ func TestLoginWaitsWhilePending(t *testing.T) {
 	}
 }
 
+// With no timeout set, the hub's expires_at bounds the wait, not a shorter
+// default of sock's own.
+func TestLoginWaitsUntilTheHubsExpiry(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	app.LoginTimeout = 0
+	var deadline time.Time
+	app.Sleep = func(ctx context.Context, _ time.Duration) error {
+		deadline, _ = ctx.Deadline()
+		return nil
+	}
+	start := time.Now()
+	if _, errOut, err := run(t, app, nil, "login"); err != nil {
+		t.Fatalf("login: %v %q", err, errOut)
+	}
+	if wait := deadline.Sub(start); wait < socktest.SignInTTL-time.Minute || wait > socktest.SignInTTL+time.Minute {
+		t.Fatalf("waited up to %v, want the hub's %v", wait, socktest.SignInTTL)
+	}
+}
+
 func TestLoginGivesUpAtItsTimeout(t *testing.T) {
 	srv := socktest.New(t)
 	for range 10000 {

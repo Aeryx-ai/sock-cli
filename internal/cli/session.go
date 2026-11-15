@@ -166,13 +166,17 @@ func (a *App) login(cmd *cobra.Command, f signInFlags) error {
 	return err
 }
 
+// defaultLoginTimeout outlasts the hub's 15 minute sign-in, so its expires_at
+// ends the wait.
+const defaultLoginTimeout = 20 * time.Minute
+
 // waitForBrowser polls FinishTerminalSignIn at the interval the hub names
 // until a browser has finished, the sign-in expires or LoginTimeout passes.
 // The first poll waits a full interval: Start counted as one.
 func (a *App) waitForBrowser(ctx context.Context, c Clients, start *sockv1.StartTerminalSignInResponse) (*sockv1.FinishTerminalSignInResponse, error) {
 	timeout := a.LoginTimeout
 	if timeout <= 0 {
-		timeout = 10 * time.Minute
+		timeout = defaultLoginTimeout
 	}
 	deadline := time.Now().Add(timeout)
 	if exp := start.GetExpiresAt(); exp != nil && exp.AsTime().Before(deadline) {
