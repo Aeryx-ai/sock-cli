@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -71,7 +73,9 @@ func newLoginCmd(app *App) *cobra.Command {
 			"one it rejects is removed and replaced. login also keeps a machine key for this host (machine_key) so sock-mcp makes " +
 			"each project its own puppet: one that works is kept, a missing or rejected one is minted, one that cannot be checked is kept. " +
 			"A puppet token or machine key in token is moved to puppet_token or machine_key, and one the server rejects is removed; " +
-			"a puppet token is shown only once, so only the server's TOKEN_INVALID removes one.",
+			"a puppet token is shown only once, so only the server's TOKEN_INVALID removes one. " +
+			"A config file for another server is switched to this one when none of its credentials works at its own (the old file is kept as config.toml.old); " +
+			"while one does, login refuses.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return app.login(cmd, f) },
 	}
@@ -104,11 +108,8 @@ func (a *App) login(cmd *cobra.Command, f signInFlags) error {
 	if a.ConfigPath == "" {
 		return errors.New("no config file path: set HOME or XDG_CONFIG_HOME")
 	}
-	// the file's credentials go only to the file's server
-	if why, err := config.CredentialConflict(a.ConfigPath, cfg.URL, cfg.AccessGate); err != nil {
+	if err := a.switchServer(cmd, cfg); err != nil {
 		return err
-	} else if why != "" {
-		return errors.New(why)
 	}
 	if err := a.clearPuppetTokens(cmd, cfg); err != nil {
 		return err
@@ -347,6 +348,54 @@ func (a *App) showCode(stderr io.Writer, noBrowser bool, hub string, start *sock
 	}
 	_, err := fmt.Fprintln(stderr, how)
 	return err
+}
+
+// switchServer moves the config file to cfg's server when it names another
+// server or gate (a file holding a credential names DefaultURL without url)
+// and none of its credentials works at its own: they are removed, never sent
+// to cfg's server, and the old file is kept beside it. One that works there
+// keeps the file as it is, and login refuses naming both servers.
+func (a *App) switchServer(cmd *cobra.Command, cfg config.Config) error {
+	fc, err := client.LoadFileConfig(a.ConfigPath)
+	if err != nil {
+		return err
+	}
+	var creds []string
+	for _, c := range []string{fc.Token, fc.PuppetToken, fc.MachineKey} {
+		if c = strings.TrimSpace(c); c != "" {
+			creds = append(creds, c)
+		}
+	}
+	file := cfg
+	file.URL, file.AccessGate = fc.URL, strings.TrimSpace(fc.AccessGate)
+	if file.URL == "" && len(creds) > 0 {
+		file.URL = config.DefaultURL
+	}
+	if (file.URL == "" || config.SameServer(file.URL, cfg.URL)) && (file.AccessGate == "" || file.AccessGate == cfg.AccessGate) {
+		return nil
+	}
+	if file.URL == "" {
+		file.URL = config.DefaultURL
+	}
+	works := make([]bool, len(creds))
+	var wg sync.WaitGroup
+	for i, c := range creds {
+		wg.Go(func() { works[i] = a.checkCredential(cmd.Context(), file, c) == nil })
+	}
+	wg.Wait()
+	if slices.Contains(works, true) {
+		return fmt.Errorf("the config file's credentials work at %s, not at %s where this login is; unset SOCK_URL and --url to stay at %s, or set XDG_CONFIG_HOME to keep another config for %s", file.URL, cfg.URL, file.URL, cfg.URL)
+	}
+	backup, err := config.SwitchServer(a.ConfigPath, fc)
+	if err != nil {
+		return err
+	}
+	why := "it held no credentials"
+	if len(creds) > 0 {
+		why = "its credentials were rejected there or could not be checked"
+	}
+	warnf(cmd.ErrOrStderr(), "switched the config file from %s to %s: %s (the old file is %s)", file.URL, cfg.URL, why, backup)
+	return nil
 }
 
 // clearPuppetTokens readies the config file, whose server is cfg's, for a

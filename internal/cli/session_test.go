@@ -557,22 +557,64 @@ func TestLoginKeepsAnUncheckedMachineKey(t *testing.T) {
 	}
 }
 
-// The file's credentials belong to its url, the default when it names none:
-// a login at another server never sends them there.
-func TestLoginRefusesAnotherServerForTheFilesCredentials(t *testing.T) {
-	srv := socktest.New(t)
+// A file for another server whose credentials work there is left alone, and
+// login names both servers. The credentials are checked only at their own.
+func TestLoginRefusesAnotherServerWhereTheFilesCredentialsWork(t *testing.T) {
+	old, srv := socktest.New(t), socktest.New(t)
 	app := humanApp(t, srv, nil) // SOCK_URL is srv
 	for _, body := range []string{
-		fmt.Sprintf("machine_key = %q\n", socktest.MachineKeyToken),
-		fmt.Sprintf("token = %q\n", socktest.HumanToken),
+		fmt.Sprintf("url = %q\nmachine_key = %q\n", old.URL, socktest.MachineKeyToken),
+		fmt.Sprintf("url = %q\ntoken = %q\n", old.URL, socktest.HumanToken),
 	} {
 		writeConfig(t, app, body)
-		if _, _, err := run(t, app, nil, "login"); err == nil {
-			t.Fatalf("%q: login at another server ran", body)
+		_, _, err := run(t, app, nil, "login")
+		if err == nil || !strings.Contains(err.Error(), old.URL) || !strings.Contains(err.Error(), srv.URL) {
+			t.Fatalf("%q: got %v", body, err)
 		}
 		if len(srv.Calls) != 0 || fileBody(t, app) != body {
-			t.Fatalf("%q: credentials sent to SOCK_URL", body)
+			t.Fatalf("%q: file changed or credentials sent to SOCK_URL", body)
 		}
+	}
+}
+
+// A file for another server whose credentials are rejected there, or cannot be
+// checked, or that holds none, is switched to the server login is using: its
+// credentials are removed, never sent there, and the old file is kept.
+func TestLoginSwitchesAFileWhoseServerNoLongerTakesIt(t *testing.T) {
+	old := socktest.New(t)
+	for name, url := range map[string]string{"rejected": old.URL, "unreachable": "http://127.0.0.1:1"} {
+		srv := socktest.New(t)
+		app := humanApp(t, srv, nil)
+		withBrowser(t, app, srv)
+		body := fmt.Sprintf("url = %q\ntoken = %q\nmachine_key = %q\nmessage_owner = false\n", url, "sock_st_dead_secret", "sock_mk_dead_secret")
+		writeConfig(t, app, body)
+		_, errOut, err := run(t, app, nil, "login")
+		if err != nil || !strings.Contains(errOut, "sock: switched the config file from "+url+" to "+srv.URL) || strings.Contains(errOut, "dead_secret") {
+			t.Fatalf("%s: %v, %q", name, err, errOut)
+		}
+		fc, _ := client.LoadFileConfig(app.ConfigPath)
+		if fc.URL != srv.URL || fc.Token != socktest.HumanToken || fc.MachineKey != socktest.MintedMachineKey || fc.MessageOwner == nil || *fc.MessageOwner {
+			t.Fatalf("%s: config %+v", name, fc)
+		}
+		for _, c := range srv.Calls {
+			if strings.Contains(c.Header.Get("Authorization"), "dead_secret") {
+				t.Fatalf("%s: the old server's credential went to %s", name, c.Method)
+			}
+		}
+		if b, err := os.ReadFile(app.ConfigPath + ".old"); err != nil || string(b) != body {
+			t.Fatalf("%s: old file %q, %v", name, b, err)
+		}
+	}
+	// a file naming another server and holding no credential just switches
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	writeConfig(t, app, fmt.Sprintf("url = %q\n", old.URL))
+	if _, errOut, err := run(t, app, nil, "login"); err != nil {
+		t.Fatalf("no credentials: %v, %q", err, errOut)
+	}
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.URL != srv.URL || fc.Token != socktest.HumanToken {
+		t.Fatalf("no credentials: config %+v", fc)
 	}
 }
 

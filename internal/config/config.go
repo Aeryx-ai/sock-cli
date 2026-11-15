@@ -256,19 +256,32 @@ func PuppetFileConflict(path, url, gate string) (string, error) {
 	return serverConflict(f.URL, f.AccessGate, url, gate), nil
 }
 
-// CredentialConflict is PuppetFileConflict for a command that also sends the
-// file's own credentials: a file holding one names its server even without
-// url, DefaultURL then, so they never go to another.
-func CredentialConflict(path, url, gate string) (string, error) {
-	f, err := client.LoadFileConfig(path)
+// SwitchServer empties the config file of its server, url, access_gate and
+// every credential key, keeping every other key, while it still holds
+// checked's; another written since is ErrTokenChanged. The file as it was is
+// first copied to the path it returns, beside it, mode 0600.
+func SwitchServer(path string, checked client.FileConfig) (string, error) {
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("config: %w", err)
 	}
-	fileURL := f.URL
-	if fileURL == "" && strings.TrimSpace(f.Token+f.PuppetToken+f.MachineKey) != "" {
-		fileURL = DefaultURL
+	backup := path + ".old"
+	if err := os.Remove(backup); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("config: %w", err)
 	}
-	return serverConflict(fileURL, f.AccessGate, url, gate), nil
+	if err := os.WriteFile(backup, b, 0o600); err != nil {
+		return "", fmt.Errorf("config: %w", err)
+	}
+	held := map[string]string{"url": checked.URL, "access_gate": checked.AccessGate, "token": checked.Token, "puppet_token": checked.PuppetToken, "machine_key": checked.MachineKey}
+	return backup, rewrite(path, func(m map[string]any) error {
+		for k, v := range held {
+			if s, _ := m[k].(string); strings.TrimSpace(s) != strings.TrimSpace(v) {
+				return ErrTokenChanged
+			}
+			delete(m, k)
+		}
+		return nil
+	})
 }
 
 // serverConflict says why a credential for url and gate cannot sit in a file

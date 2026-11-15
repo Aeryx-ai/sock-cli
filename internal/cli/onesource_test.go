@@ -45,8 +45,7 @@ func TestLogoutUsesTheFileTokenAndServer(t *testing.T) {
 }
 
 // sock login at SOCK_URL records that server beside the token, so the next
-// command with the same SOCK_URL runs; a file naming another server is
-// refused before the browser opens.
+// command with the same SOCK_URL runs.
 func TestLoginRecordsItsServer(t *testing.T) {
 	srv := socktest.New(t)
 	app := humanApp(t, srv, nil)
@@ -57,11 +56,6 @@ func TestLoginRecordsItsServer(t *testing.T) {
 	srv.Me = socktest.Human()
 	if _, _, err := run(t, app, nil, "whoami"); err != nil {
 		t.Fatalf("whoami after login: %v", err)
-	}
-	other := humanApp(t, srv, nil)
-	writeConfig(t, other, "url = \"https://other.example\"\n")
-	if _, _, err := run(t, other, nil, "login"); err == nil {
-		t.Fatal("login saved a token for another server")
 	}
 }
 
