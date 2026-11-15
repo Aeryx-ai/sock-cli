@@ -367,7 +367,7 @@ func (a *App) keepSession(cmd *cobra.Command, cfg config.Config, existing string
 		}
 		return false, nil
 	case err != nil:
-		return false, fmt.Errorf("could not check the session in %s (%w); it is unchanged, run sock login again", a.ConfigPath, err)
+		return false, fmt.Errorf("could not check the session in %s with %s (%w); it is unchanged", a.ConfigPath, cfg.URL, err)
 	}
 	a.keepMachineKey(cmd, cfg, existing)
 	if a.jsonOut {
@@ -399,12 +399,12 @@ func (a *App) checkKey(ctx context.Context, cfg config.Config, key string) error
 	return err
 }
 
-// rejected reports whether the hub answered that it no longer accepts the
-// credential a call carried: TOKEN_INVALID, which the hub attaches to every
-// unknown, revoked or wrong token. A bare 401 (a proxy in front of the hub)
-// is not that answer.
+// rejected reports whether the server refused the credential a call carried:
+// TOKEN_INVALID, which the hub attaches to every unknown, revoked or wrong
+// token, or a bare 401 (an older server, a proxy). Either way the credential
+// does not work there, and a session or machine key is minted again at will.
 func rejected(err error) bool {
-	return client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID
+	return client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID || connect.CodeOf(err) == connect.CodeUnauthenticated
 }
 
 // keepMachineKey makes sure the config file holds a machine key the hub

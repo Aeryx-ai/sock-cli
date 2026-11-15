@@ -422,7 +422,7 @@ func TestLoginUncheckedSessionChangesNothing(t *testing.T) {
 	app := humanApp(t, srv, nil)
 	body := fileSignedIn(t, srv, app, socktest.HumanToken, "")
 	_, _, err := run(t, app, nil, "login")
-	if err == nil || !strings.Contains(err.Error(), "could not check the session") {
+	if err == nil || !strings.Contains(err.Error(), "could not check the session") || !strings.Contains(err.Error(), srv.URL) || strings.Contains(err.Error(), "run sock login") {
 		t.Fatalf("got %v", err)
 	}
 	if fileBody(t, app) != body || hubWrites(srv) != 0 {
@@ -871,28 +871,22 @@ func TestRegisterIsGone(t *testing.T) {
 	}
 }
 
-// A 401 with no TOKEN_INVALID reason (a proxy in front of the hub) is not the
-// hub rejecting the credential: nothing is removed or replaced.
-func TestLoginTreatsABare401AsUnchecked(t *testing.T) {
+// A 401 with no TOKEN_INVALID reason (an old server, a proxy) rejects a
+// session or machine key too: both are minted again, so login replaces them
+// rather than refusing in a loop the person cannot leave.
+func TestLoginReplacesCredentialsRejectedWithABare401(t *testing.T) {
 	bare := connect.NewError(connect.CodeUnauthenticated, errors.New("proxy says no"))
 	srv := socktest.New(t)
-	srv.Fail = map[string]error{"GetMe": bare}
+	srv.Fail = map[string]error{"GetMe": bare, "ListPuppets": bare}
 	app := humanApp(t, srv, nil)
-	body := fileSignedIn(t, srv, app, socktest.HumanToken, socktest.MachineKeyToken)
-	if _, _, err := run(t, app, nil, "login"); err == nil || !strings.Contains(err.Error(), "could not check the session") {
-		t.Fatalf("session: %v", err)
+	withBrowser(t, app, srv)
+	fileSignedIn(t, srv, app, socktest.HumanToken, socktest.MachineKeyToken)
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil || !strings.HasPrefix(out, "signed in as @guy") || len(srv.CallsTo("StartTerminalSignIn")) != 1 {
+		t.Fatalf("login: %v, %q, %q", err, out, errOut)
 	}
-	if fileBody(t, app) != body || hubWrites(srv) != 0 {
-		t.Fatal("session removed on a bare 401")
-	}
-
-	srv.Fail = map[string]error{"ListPuppets": bare}
-	_, errOut, err := run(t, app, nil, "login")
-	if err != nil || !strings.HasPrefix(errOut, "sock: could not check the machine key (") {
-		t.Fatalf("key: %v, %q", err, errOut)
-	}
-	if fileBody(t, app) != body || hubWrites(srv) != 0 {
-		t.Fatal("machine key replaced on a bare 401")
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.Token != socktest.HumanToken || fc.MachineKey != socktest.MintedMachineKey {
+		t.Fatalf("config %+v", fc)
 	}
 }
 
