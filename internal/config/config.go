@@ -259,18 +259,25 @@ func PuppetFileConflict(path, url, gate string) (string, error) {
 // SwitchServer empties the config file of its server, url, access_gate and
 // every credential key, keeping every other key, while it still holds
 // checked's; another written since is ErrTokenChanged. The file as it was is
-// first copied to the path it returns, beside it, mode 0600.
+// first copied to a new file beside it, mode 0600, whose path it returns.
 func SwitchServer(path string, checked client.FileConfig) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("config: %w", err)
 	}
-	backup := path + ".old"
-	if err := os.Remove(backup); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	// a name of its own, created 0600 and never through a link: an earlier
+	// old file may hold the only copy of a puppet token
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".old-*")
+	if err != nil {
 		return "", fmt.Errorf("config: %w", err)
 	}
-	if err := os.WriteFile(backup, b, 0o600); err != nil {
-		return "", fmt.Errorf("config: %w", err)
+	backup := f.Name()
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return "", fmt.Errorf("config: write %s: %w", backup, err)
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("config: close %s: %w", backup, err)
 	}
 	held := map[string]string{"url": checked.URL, "access_gate": checked.AccessGate, "token": checked.Token, "puppet_token": checked.PuppetToken, "machine_key": checked.MachineKey}
 	return backup, rewrite(path, func(m map[string]any) error {

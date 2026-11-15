@@ -74,7 +74,7 @@ func newLoginCmd(app *App) *cobra.Command {
 			"each project its own puppet: one that works is kept, a missing or rejected one is minted, one that cannot be checked is kept. " +
 			"A puppet token or machine key in token is moved to puppet_token or machine_key, and one the server rejects is removed; " +
 			"a puppet token is shown only once, so only the server's TOKEN_INVALID removes one. " +
-			"A config file for another server is switched to this one when none of its credentials works at its own (the old file is kept as config.toml.old); " +
+			"A config file for another server is switched to this one when none of its credentials works at its own (the old file is kept beside it as config.toml.old-*); " +
 			"while one does, login refuses.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return app.login(cmd, f) },
@@ -382,14 +382,19 @@ func (a *App) switchServer(cmd *cobra.Command, cfg config.Config) error {
 	if file.URL == "" {
 		file.URL = config.DefaultURL
 	}
-	works := make([]bool, len(creds))
+	// gone: rejected as discardable says, or the server unreachable
+	gone := make([]bool, len(creds))
 	var wg sync.WaitGroup
 	for i, c := range creds {
-		wg.Go(func() { works[i] = a.checkCredential(cmd.Context(), file, c) == nil })
+		wg.Go(func() {
+			err := a.checkCredential(cmd.Context(), file, c)
+			limited := client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_RATE_LIMITED
+			gone[i] = discardable(c, err) || client.Transient(err) && !limited
+		})
 	}
 	wg.Wait()
-	if slices.Contains(works, true) {
-		return fmt.Errorf("the config file's credentials work at %s, not at %s where this login is; unset SOCK_URL and --url to stay at %s, or set XDG_CONFIG_HOME to keep another config for %s", file.URL, cfg.URL, file.URL, cfg.URL)
+	if slices.Contains(gone, false) {
+		return fmt.Errorf("the config file's credentials may still work at %s, not at %s where this login is; unset SOCK_URL and --url to stay at %s, or set XDG_CONFIG_HOME to keep another config for %s", file.URL, cfg.URL, file.URL, cfg.URL)
 	}
 	backup, err := config.SwitchServer(a.ConfigPath, fc)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -557,6 +558,68 @@ func TestLoginKeepsAnUncheckedMachineKey(t *testing.T) {
 	}
 }
 
+// oldFiles are the bodies of the config files login switched away from.
+func oldFiles(t *testing.T, app *App) []string {
+	t.Helper()
+	paths, err := filepath.Glob(app.ConfigPath + ".old*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bodies []string
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode %v", p, fi.Mode())
+		}
+		bodies = append(bodies, string(b))
+	}
+	return bodies
+}
+
+// Each switch keeps its own old file: a later one never overwrites the only
+// copy of a puppet token an earlier one set aside.
+func TestLoginKeepsEveryOldFile(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	first := fmt.Sprintf("url = %q\npuppet_token = %q\n", "http://127.0.0.1:1", socktest.Token)
+	writeConfig(t, app, first)
+	if _, errOut, err := run(t, app, nil, "login"); err != nil {
+		t.Fatalf("first: %v, %q", err, errOut)
+	}
+	second := "url = \"http://127.0.0.1:2\"\n"
+	writeConfig(t, app, second)
+	if _, errOut, err := run(t, app, nil, "login"); err != nil {
+		t.Fatalf("second: %v, %q", err, errOut)
+	}
+	if olds := oldFiles(t, app); len(olds) != 2 || !slices.Contains(olds, first) || !slices.Contains(olds, second) {
+		t.Fatalf("old files %q", olds)
+	}
+}
+
+// A puppet token at another server that answers anything but TOKEN_INVALID
+// or an outage (a bare 401, a rate limit) may still work: login refuses
+// rather than set it aside.
+func TestLoginRefusesASwitchThatMightLoseAPuppetToken(t *testing.T) {
+	bare := connect.NewError(connect.CodeUnauthenticated, errors.New("proxy says no"))
+	for _, fail := range []error{bare, socktest.RateLimited("1")} {
+		old, srv := socktest.New(t), socktest.New(t)
+		old.Fail = map[string]error{"GetMe": fail}
+		app := humanApp(t, srv, nil)
+		body := fmt.Sprintf("url = %q\npuppet_token = %q\n", old.URL, socktest.Token)
+		writeConfig(t, app, body)
+		if _, _, err := run(t, app, nil, "login"); err == nil || !strings.Contains(err.Error(), old.URL) {
+			t.Fatalf("%v: got %v", fail, err)
+		}
+		if fileBody(t, app) != body || len(srv.Calls) != 0 {
+			t.Fatalf("%v: file switched", fail)
+		}
+	}
+}
+
 // A file for another server whose credentials work there is left alone, and
 // login names both servers. The credentials are checked only at their own.
 func TestLoginRefusesAnotherServerWhereTheFilesCredentialsWork(t *testing.T) {
@@ -601,8 +664,8 @@ func TestLoginSwitchesAFileWhoseServerNoLongerTakesIt(t *testing.T) {
 				t.Fatalf("%s: the old server's credential went to %s", name, c.Method)
 			}
 		}
-		if b, err := os.ReadFile(app.ConfigPath + ".old"); err != nil || string(b) != body {
-			t.Fatalf("%s: old file %q, %v", name, b, err)
+		if olds := oldFiles(t, app); len(olds) != 1 || olds[0] != body {
+			t.Fatalf("%s: old files %q", name, olds)
 		}
 	}
 	// a file naming another server and holding no credential just switches
