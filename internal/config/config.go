@@ -286,7 +286,7 @@ func serverConflict(fileURL, fileGate, url, gate string) string {
 // RemoveToken deletes the token from the config file, keeping every other
 // key. A missing file is not an error.
 func RemoveToken(path string) error {
-	return removeToken(path, func(string) bool { return true })
+	return removeKey(path, "token", func(string) bool { return true })
 }
 
 // ErrTokenChanged means the config file no longer holds the token a command
@@ -296,17 +296,39 @@ var ErrTokenChanged = errors.New("the config file's token changed since it was c
 // RemoveCheckedToken is RemoveToken while the file still holds token, the one
 // checked; another written since is ErrTokenChanged and kept.
 func RemoveCheckedToken(path, token string) error {
-	return removeToken(path, func(held string) bool { return held == token })
+	return RemoveChecked(path, "token", token)
 }
 
-func removeToken(path string, may func(held string) bool) error {
+// RemoveChecked deletes key, one of the credential keys, while the file still
+// holds value, the one checked; another written since is ErrTokenChanged.
+func RemoveChecked(path, key, value string) error {
+	return removeKey(path, key, func(held string) bool { return held == value })
+}
+
+func removeKey(path, key string, may func(held string) bool) error {
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	return rewrite(path, func(m map[string]any) error {
-		if s, _ := m["token"].(string); !may(strings.TrimSpace(s)) {
+		if s, _ := m[key].(string); !may(strings.TrimSpace(s)) {
 			return ErrTokenChanged
 		}
+		delete(m, key)
+		return nil
+	})
+}
+
+// MoveToken moves token from the file's token to dest, puppet_token or
+// machine_key, while token is still there and dest is empty or holds the same
+// value; otherwise ErrTokenChanged and nothing changes.
+func MoveToken(path, token, dest string) error {
+	return rewrite(path, func(m map[string]any) error {
+		held, _ := m["token"].(string)
+		there, _ := m[dest].(string)
+		if strings.TrimSpace(held) != token || strings.TrimSpace(there) != "" && strings.TrimSpace(there) != token {
+			return ErrTokenChanged
+		}
+		m[dest] = token
 		delete(m, "token")
 		return nil
 	})

@@ -9,6 +9,7 @@ import (
 const (
 	humanTokenPrefix  = "sock_st_"
 	puppetTokenPrefix = "sock_pt_"
+	machineKeyPrefix  = "sock_mk_"
 )
 
 // humanText rewrites refusals whose remedy differs for a human session.

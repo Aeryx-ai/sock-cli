@@ -90,16 +90,88 @@ func fileToken(t *testing.T, app *App) string {
 	return tok
 }
 
-func TestLoginRefusesExistingToken(t *testing.T) {
+// A puppet token in token is moved to puppet_token, where sock-mcp reads it,
+// never lost: it is shown only once. Sign-in then proceeds.
+func TestLoginMovesAPuppetTokenOutOfTheWay(t *testing.T) {
 	srv := socktest.New(t)
 	app := humanApp(t, srv, nil)
-	writeConfig(t, app, "token = \"sock_pt_keepme_secret\"\n")
-	_, _, err := run(t, app, nil, "login")
-	if err == nil || !strings.Contains(err.Error(), "already holds a token") {
-		t.Fatalf("got %v", err)
+	withBrowser(t, app, srv)
+	writeConfig(t, app, fmt.Sprintf("url = %q\ntoken = %q\n", srv.URL, socktest.Token))
+	_, errOut, err := run(t, app, nil, "login")
+	if err != nil || !strings.Contains(errOut, "sock: moved the puppet token in token to puppet_token\n") {
+		t.Fatalf("login: %v, %q", err, errOut)
 	}
-	if fileToken(t, app) != "sock_pt_keepme_secret" || len(srv.CallsTo("StartTerminalSignIn")) != 0 {
-		t.Fatal("existing token touched")
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.Token != socktest.HumanToken || fc.PuppetToken != socktest.Token {
+		t.Fatalf("config %+v", fc)
+	}
+	// a machine key goes to machine_key, then is checked there
+	app = humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	writeConfig(t, app, fmt.Sprintf("url = %q\ntoken = %q\n", srv.URL, socktest.MachineKeyToken))
+	if _, errOut, err := run(t, app, nil, "login"); err != nil || !strings.Contains(errOut, "sock: moved the machine key in token to machine_key\n") || !strings.Contains(errOut, "machine key works") {
+		t.Fatalf("login: %v, %q", err, errOut)
+	}
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.Token != socktest.HumanToken || fc.MachineKey != socktest.MachineKeyToken {
+		t.Fatalf("config %+v", fc)
+	}
+}
+
+// A credential the server rejects is removed, with a note, and sign-in
+// proceeds; one it may still accept is never thrown away.
+func TestLoginRemovesRejectedPuppetTokens(t *testing.T) {
+	srv := socktest.New(t)
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	// token is dead, puppet_token lives: token goes, puppet_token stays
+	writeConfig(t, app, fmt.Sprintf("url = %q\ntoken = %q\npuppet_token = %q\n", srv.URL, "sock_pt_dead_secret", socktest.Token))
+	_, errOut, err := run(t, app, nil, "login")
+	if err != nil || !strings.Contains(errOut, "sock: removed a token the server at "+srv.URL+" rejected\n") || strings.Contains(errOut, "dead_secret") {
+		t.Fatalf("login: %v, %q", err, errOut)
+	}
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.Token != socktest.HumanToken || fc.PuppetToken != socktest.Token {
+		t.Fatalf("config %+v", fc)
+	}
+	// a dead puppet_token beside a live session goes too
+	fileSignedIn(t, srv, app, socktest.HumanToken, "")
+	writeConfig(t, app, fileBody(t, app)+"puppet_token = \"sock_pt_dead_secret\"\n")
+	out, errOut, err := run(t, app, nil, "login")
+	if err != nil || out != "already signed in as @guy\n" || !strings.Contains(errOut, "sock: removed a puppet_token the server at "+srv.URL+" rejected\n") {
+		t.Fatalf("second login: %v, %q, %q", err, out, errOut)
+	}
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.PuppetToken != "" {
+		t.Fatalf("config %+v", fc)
+	}
+}
+
+// Two puppet tokens the server may accept, in token and puppet_token: login
+// keeps both and says so. A bare 401 is not enough to throw one away.
+func TestLoginKeepsTwoLivePuppetTokens(t *testing.T) {
+	bare := connect.NewError(connect.CodeUnauthenticated, errors.New("proxy says no"))
+	for _, fail := range []map[string]error{nil, {"GetMe": bare}} {
+		srv := socktest.New(t)
+		srv.Fail = fail
+		app := humanApp(t, srv, nil)
+		body := fmt.Sprintf("url = %q\ntoken = %q\npuppet_token = %q\n", srv.URL, socktest.Token, "sock_pt_device-new_secret")
+		writeConfig(t, app, body)
+		_, _, err := run(t, app, nil, "login")
+		if err == nil || !strings.Contains(err.Error(), "token and puppet_token") {
+			t.Fatalf("%v: got %v", fail, err)
+		}
+		if fileBody(t, app) != body || len(srv.CallsTo("StartTerminalSignIn")) != 0 {
+			t.Fatalf("%v: a live puppet token touched", fail)
+		}
+	}
+	// alone, a puppet_token refused with a bare 401 stays
+	srv := socktest.New(t)
+	srv.Fail = map[string]error{"GetMe": bare}
+	app := humanApp(t, srv, nil)
+	withBrowser(t, app, srv)
+	writeConfig(t, app, fmt.Sprintf("url = %q\npuppet_token = %q\n", srv.URL, socktest.Token))
+	if _, errOut, err := run(t, app, nil, "login"); err != nil {
+		t.Fatalf("login: %v, %q", err, errOut)
+	}
+	if fc, _ := client.LoadFileConfig(app.ConfigPath); fc.PuppetToken != socktest.Token || fc.Token != socktest.HumanToken {
+		t.Fatalf("config %+v", fc)
 	}
 }
 

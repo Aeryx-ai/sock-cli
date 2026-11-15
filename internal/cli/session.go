@@ -70,7 +70,8 @@ func newLoginCmd(app *App) *cobra.Command {
 			"Run it again any time: a session the server still accepts is kept (\"already signed in\") and no browser opens; " +
 			"one it rejects is removed and replaced. login also keeps a machine key for this host (machine_key) so sock-mcp makes " +
 			"each project its own puppet: one that works is kept, a missing or rejected one is minted, one that cannot be checked is kept. " +
-			"A puppet token in the config file's token is refused: it is shown only once.",
+			"A puppet token or machine key in token is moved to puppet_token or machine_key, and one the server rejects is removed; " +
+			"a puppet token is shown only once, so only the server's TOKEN_INVALID removes one.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return app.login(cmd, f) },
 	}
@@ -103,18 +104,18 @@ func (a *App) login(cmd *cobra.Command, f signInFlags) error {
 	if a.ConfigPath == "" {
 		return errors.New("no config file path: set HOME or XDG_CONFIG_HOME")
 	}
-	existing, err := config.FileToken(a.ConfigPath)
-	if err != nil {
-		return err
-	}
-	if existing != "" && !strings.HasPrefix(existing, humanTokenPrefix) {
-		return a.tokenExists() // a puppet token there is shown only once
-	}
 	// the file's credentials go only to the file's server
 	if why, err := config.CredentialConflict(a.ConfigPath, cfg.URL, cfg.AccessGate); err != nil {
 		return err
 	} else if why != "" {
 		return errors.New(why)
+	}
+	if err := a.clearPuppetTokens(cmd, cfg); err != nil {
+		return err
+	}
+	existing, err := config.FileToken(a.ConfigPath)
+	if err != nil {
+		return err
 	}
 	label, err := a.deviceLabel(f.label)
 	if err != nil {
@@ -348,6 +349,70 @@ func (a *App) showCode(stderr io.Writer, noBrowser bool, hub string, start *sock
 	return err
 }
 
+// clearPuppetTokens readies the config file, whose server is cfg's, for a
+// session in token: a puppet_token the hub revoked is removed, and a puppet
+// token or machine key in token is moved to its own key, or removed when the
+// server rejects it. A puppet token is thrown away only on TOKEN_INVALID, since
+// it is shown only once; two that may work are both kept, and login refuses.
+func (a *App) clearPuppetTokens(cmd *cobra.Command, cfg config.Config) error {
+	stderr, ctx := cmd.ErrOrStderr(), cmd.Context()
+	fc, err := client.LoadFileConfig(a.ConfigPath)
+	if err != nil {
+		return err
+	}
+	pt := strings.TrimSpace(fc.PuppetToken)
+	if pt != "" && revoked(a.checkCredential(ctx, cfg, pt)) {
+		if err := config.RemoveChecked(a.ConfigPath, "puppet_token", pt); err != nil {
+			return err
+		}
+		warnf(stderr, "removed a puppet_token the server at %s rejected", cfg.URL)
+		pt = ""
+	}
+	tok := strings.TrimSpace(fc.Token)
+	if tok == "" || strings.HasPrefix(tok, humanTokenPrefix) {
+		return nil
+	}
+	dest, what, there := "puppet_token", "puppet token", pt
+	if strings.HasPrefix(tok, machineKeyPrefix) {
+		dest, what, there = "machine_key", "machine key", strings.TrimSpace(fc.MachineKey)
+	}
+	if there == "" || there == tok {
+		if err := config.MoveToken(a.ConfigPath, tok, dest); err != nil {
+			return err
+		}
+		warnf(stderr, "moved the %s in token to %s", what, dest)
+		return nil
+	}
+	if err := a.checkCredential(ctx, cfg, tok); !discardable(tok, err) {
+		return fmt.Errorf("%s holds two credentials the server at %s may still accept, in token and %s; keep a copy of the one in token (it is shown only once) and remove it", a.ConfigPath, cfg.URL, dest)
+	}
+	if err := config.RemoveCheckedToken(a.ConfigPath, tok); err != nil {
+		return err
+	}
+	warnf(stderr, "removed a token the server at %s rejected", cfg.URL)
+	return nil
+}
+
+// checkCredential checks any credential at cfg's server: a machine key with
+// checkKey, anything else with checkSession.
+func (a *App) checkCredential(ctx context.Context, cfg config.Config, cred string) error {
+	if strings.HasPrefix(cred, machineKeyPrefix) {
+		return a.checkKey(ctx, cfg, cred)
+	}
+	_, err := a.checkSession(ctx, cfg, cred)
+	return err
+}
+
+// discardable reports whether a credential the server answered err for may be
+// thrown away: a session or machine key on any rejection, since both are
+// minted again; anything else, a puppet token above all, only on revoked.
+func discardable(cred string, err error) bool {
+	if strings.HasPrefix(cred, humanTokenPrefix) || strings.HasPrefix(cred, machineKeyPrefix) {
+		return rejected(err)
+	}
+	return revoked(err)
+}
+
 // keepSession checks existing, the config file's session, with the hub. done
 // is true when it is valid: it is kept and reported, and the machine key
 // checked. A rejected session is removed so a sign-in can replace it; one that
@@ -404,7 +469,13 @@ func (a *App) checkKey(ctx context.Context, cfg config.Config, key string) error
 // token, or a bare 401 (an older server, a proxy). Either way the credential
 // does not work there, and a session or machine key is minted again at will.
 func rejected(err error) bool {
-	return client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID || connect.CodeOf(err) == connect.CodeUnauthenticated
+	return revoked(err) || connect.CodeOf(err) == connect.CodeUnauthenticated
+}
+
+// revoked reports the hub's own TOKEN_INVALID, the one answer that throws away
+// a puppet token: it is shown only once and cannot be minted again.
+func revoked(err error) bool {
+	return client.Reason(err) == sockv1.ErrorReason_ERROR_REASON_TOKEN_INVALID
 }
 
 // keepMachineKey makes sure the config file holds a machine key the hub
