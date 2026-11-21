@@ -4,8 +4,8 @@ github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/aeryx-ai/sock-client v0.2.3 h1:n/B6rQ1/n3vTs7Xtv4efWzN62Lv96CYYRhyFgam9GHU=
 github.com/aeryx-ai/sock-client v0.2.3/go.mod h1:yO9kTbofrM0AgyQdX/JvwRMYTUvuHA2tbjn2Y4OptEQ=
-github.com/aeryx-ai/sock-contract v0.24.0 h1:lNJyUcn0um3jgWTTe1f3j2IOZ2EevIh7yz3mfSAqVwg=
-github.com/aeryx-ai/sock-contract v0.24.0/go.mod h1:g60XOeO70lRMhIIGci7/TpE+hWsFQqjXFu+dk0B5Mq8=
+github.com/aeryx-ai/sock-contract v0.26.0 h1:HU+l+WOlYQsSZBbG3ipf0d5BRe14QTA8auyo1AdlYKg=
+github.com/aeryx-ai/sock-contract v0.26.0/go.mod h1:g60XOeO70lRMhIIGci7/TpE+hWsFQqjXFu+dk0B5Mq8=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
