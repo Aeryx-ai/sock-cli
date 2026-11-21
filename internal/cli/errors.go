@@ -36,11 +36,11 @@ var reasonText = map[sockv1.ErrorReason]string{
 }
 
 // afterServerText covers the reasons whose server message carries the
-// detail (which limit, the date to ask again): the text follows it.
+// detail (which limit): the text follows it. LIMIT_REQUEST_TOO_SOON is
+// shown as the server words it, with the date to ask again.
 var afterServerText = map[sockv1.ErrorReason]struct{ before, after string }{
 	sockv1.ErrorReason_ERROR_REASON_LIMIT_REACHED: {"", "; erase a puppet you no longer use (sock puppets erase), revoke an unused token or machine key " +
 		"(sock devices revoke), or ask for more puppets with sock limits request puppets <value> --reason <reason>"},
-	sockv1.ErrorReason_ERROR_REASON_LIMIT_REQUEST_TOO_SOON: {"your last request for that limit was declined less than 30 days ago: ", ""},
 }
 
 // rewritten is an error with new text that still unwraps to the original,
