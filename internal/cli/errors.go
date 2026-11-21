@@ -1,6 +1,10 @@
 package cli
 
 import (
+	"errors"
+
+	"connectrpc.com/connect"
+
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
 
 	client "github.com/aeryx-ai/sock-client"
@@ -26,6 +30,16 @@ var reasonText = map[sockv1.ErrorReason]string{
 	sockv1.ErrorReason_ERROR_REASON_ALREADY_REGISTERED:          "this address already has a sock account; run sock login",
 	sockv1.ErrorReason_ERROR_REASON_TERMINAL_SIGN_IN_INVALID:    "sign-in timed out; run sock login again",
 	sockv1.ErrorReason_ERROR_REASON_REGISTRATION_TICKET_INVALID: "the sign-in expired before registration finished; run sock login again",
+	sockv1.ErrorReason_ERROR_REASON_GROUP_FULL:                  "the group is full; ask for more members with sock limits request group-members <value> --reason <reason>",
+	sockv1.ErrorReason_ERROR_REASON_LIMIT_REQUEST_PENDING:       "you already have a pending request for that limit; sock limits shows it",
+}
+
+// afterServerText covers the reasons whose server message carries the
+// detail (which limit, the date to ask again): the text follows it.
+var afterServerText = map[sockv1.ErrorReason]struct{ before, after string }{
+	sockv1.ErrorReason_ERROR_REASON_LIMIT_REACHED: {"", "; erase a puppet you no longer use (sock puppets erase), revoke an unused token or machine key " +
+		"(sock devices revoke), or ask for more puppets with sock limits request puppets <value> --reason <reason>"},
+	sockv1.ErrorReason_ERROR_REASON_LIMIT_REQUEST_TOO_SOON: {"your last request for that limit was declined less than 30 days ago: ", ""},
 }
 
 // rewritten is an error with new text that still unwraps to the original,
@@ -50,6 +64,12 @@ func (a *App) describe(err error) error {
 	}
 	if text, ok := reasonText[r]; ok {
 		return &rewritten{text, err}
+	}
+	if text, ok := afterServerText[r]; ok {
+		var ce *connect.Error
+		if errors.As(err, &ce) && ce.Message() != "" {
+			return &rewritten{text.before + ce.Message() + text.after, err}
+		}
 	}
 	return err
 }

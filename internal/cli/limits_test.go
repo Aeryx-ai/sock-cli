@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"connectrpc.com/connect"
+
 	"google.golang.org/protobuf/encoding/protojson"
 
 	sockv1 "github.com/aeryx-ai/sock-contract/gen/go/sock/v1"
@@ -102,5 +104,40 @@ func TestLimitsRequestRefusesBadInput(t *testing.T) {
 	app, _ := signedIn(t)
 	if _, _, err := run(t, app, nil, "limits", "request", "puppets", "50", "--reason", strings.Repeat("é", 500)); err != nil {
 		t.Fatalf("500 character reason refused: %v", err)
+	}
+}
+
+func TestLimitErrorsNameSockLimitsRequest(t *testing.T) {
+	cases := []struct {
+		method string
+		err    error
+		args   []string
+		want   []string
+	}{
+		{"CreatePuppet", socktest.ErrorText(connect.CodeFailedPrecondition, sockv1.ErrorReason_ERROR_REASON_LIMIT_REACHED, "limit reached: puppets per owner"),
+			[]string{"puppets", "create", "ci", "--token-label", "x"},
+			[]string{"limit reached: puppets per owner", "sock puppets erase", "sock limits request puppets"}},
+		{"AddMember", socktest.Error(connect.CodeFailedPrecondition, sockv1.ErrorReason_ERROR_REASON_GROUP_FULL),
+			[]string{"conversations", "add", "c-1", "human-2"},
+			[]string{"the group is full", "sock limits request group-members"}},
+		{"RequestLimitIncrease", socktest.Error(connect.CodeAlreadyExists, sockv1.ErrorReason_ERROR_REASON_LIMIT_REQUEST_PENDING),
+			[]string{"limits", "request", "puppets", "50", "--reason", "x"},
+			[]string{"already have a pending request", "sock limits"}},
+		{"RequestLimitIncrease", socktest.ErrorText(connect.CodeFailedPrecondition, sockv1.ErrorReason_ERROR_REASON_LIMIT_REQUEST_TOO_SOON, "ask again on 2026-12-20"),
+			[]string{"limits", "request", "puppets", "50", "--reason", "x"},
+			[]string{"declined", "ask again on 2026-12-20"}},
+	}
+	for _, c := range cases {
+		app, srv := signedIn(t)
+		srv.Fail = map[string]error{c.method: c.err}
+		_, _, err := run(t, app, nil, c.args...)
+		if err == nil {
+			t.Fatalf("%s: no error", c.method)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(err.Error(), w) {
+				t.Errorf("%s: %q lacks %q", c.method, err, w)
+			}
+		}
 	}
 }
