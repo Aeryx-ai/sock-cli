@@ -121,6 +121,9 @@ type Server struct {
 	// MintMachineKeyErr, when set, is MintMachineKey's answer.
 	MintMachineKeyErr error
 	Blocked           []*sockv1.BlockedAccount
+	// Limits are GetMe's limits; LimitRequests ListMyLimitRequests' answer.
+	Limits        *sockv1.PlanLimits
+	LimitRequests []*sockv1.LimitRequest
 
 	sockv1connect.UnimplementedIdentityServiceHandler
 	sockv1connect.UnimplementedMessagingServiceHandler
@@ -211,7 +214,12 @@ func (s *Server) CallsTo(method string) []Call {
 
 // Error builds a refusal carrying reason, as the real server sends it.
 func Error(code connect.Code, reason sockv1.ErrorReason) error {
-	return withReason(connect.NewError(code, errors.New(strings.ToLower(reason.String()))), reason)
+	return ErrorText(code, reason, strings.ToLower(reason.String()))
+}
+
+// ErrorText is Error with the server's message text.
+func ErrorText(code connect.Code, reason sockv1.ErrorReason, text string) error {
+	return withReason(connect.NewError(code, errors.New(text)), reason)
 }
 
 func withReason(ce *connect.Error, reason sockv1.ErrorReason) *connect.Error {
@@ -266,7 +274,7 @@ func Heartbeat() *sockv1.SubscribeResponse {
 func (s *Server) GetMe(_ context.Context, _ *connect.Request[sockv1.GetMeRequest]) (*connect.Response[sockv1.GetMeResponse], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return connect.NewResponse(&sockv1.GetMeResponse{Account: s.Me, AcceptedTermsVersion: s.AcceptedTerms, CurrentTermsVersion: s.CurrentTerms}), nil
+	return connect.NewResponse(&sockv1.GetMeResponse{Account: s.Me, AcceptedTermsVersion: s.AcceptedTerms, CurrentTermsVersion: s.CurrentTerms, Limits: s.Limits}), nil
 }
 
 // ListConversations implements the generated handler.

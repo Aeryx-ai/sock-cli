@@ -115,6 +115,8 @@ An `<account>` is an account id or `@handle`.
     sock puppets prune [--yes] [--with-tokens]   # erase "<project> on <host>" puppets no machine key here made
     sock machine-key create [--label <label>]    # default the short hostname; prints the key alone on stdout
     sock machine-key use [--force]               # key on stdin, kept as machine_key for sock-mcp (prints no secret)
+    sock limits                                  # your limits, then your requests for more
+    sock limits request <key> <value> --reason <reason>   # key puppets, group-members or puppet-sends
     sock conversations
     sock conversations direct <account>
     sock conversations group [<account>...]

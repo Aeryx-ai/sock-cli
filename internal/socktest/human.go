@@ -272,3 +272,23 @@ func (s *Server) ListBlockedAccounts(context.Context, *connect.Request[sockv1.Li
 func (s *Server) FileReport(context.Context, *connect.Request[sockv1.FileReportRequest]) (*connect.Response[sockv1.FileReportResponse], error) {
 	return ok(&sockv1.FileReportResponse{ReportId: "report-1"})
 }
+
+// ListMyLimitRequests implements the generated handler.
+func (s *Server) ListMyLimitRequests(context.Context, *connect.Request[sockv1.ListMyLimitRequestsRequest]) (*connect.Response[sockv1.ListMyLimitRequestsResponse], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return ok(&sockv1.ListMyLimitRequestsResponse{Requests: s.LimitRequests})
+}
+
+// RequestLimitIncrease implements the generated handler: the request,
+// pending.
+func (s *Server) RequestLimitIncrease(_ context.Context, req *connect.Request[sockv1.RequestLimitIncreaseRequest]) (*connect.Response[sockv1.RequestLimitIncreaseResponse], error) {
+	return ok(&sockv1.RequestLimitIncreaseResponse{Request: &sockv1.LimitRequest{
+		Id:        "lr-new",
+		Key:       req.Msg.GetKey(),
+		Requested: req.Msg.GetRequested(),
+		Reason:    req.Msg.GetReason(),
+		CreatedAt: timestamppb.New(time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)),
+		State:     sockv1.LimitRequestState_LIMIT_REQUEST_STATE_PENDING,
+	}})
+}
