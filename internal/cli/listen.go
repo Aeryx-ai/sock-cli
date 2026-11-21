@@ -273,5 +273,6 @@ func reconnectable(err error) bool {
 	case connect.CodeUnauthenticated, connect.CodePermissionDenied, connect.CodeInvalidArgument, connect.CodeUnimplemented:
 		return false
 	}
-	return true
+	// an archived puppet stays refused until its owner unarchives it
+	return client.Reason(err) != sockv1.ErrorReason_ERROR_REASON_PUPPET_ARCHIVED
 }

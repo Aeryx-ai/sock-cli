@@ -126,6 +126,9 @@ func TestLimitErrorsNameSockLimitsRequest(t *testing.T) {
 		{"RequestLimitIncrease", socktest.ErrorText(connect.CodeFailedPrecondition, sockv1.ErrorReason_ERROR_REASON_LIMIT_REQUEST_TOO_SOON, "ask again on 2026-12-20"),
 			[]string{"limits", "request", "puppets", "50", "--reason", "x"},
 			[]string{"declined", "ask again on 2026-12-20"}},
+		{"MintPuppetToken", socktest.Error(connect.CodeFailedPrecondition, sockv1.ErrorReason_ERROR_REASON_PUPPET_ARCHIVED),
+			[]string{"puppets", "token", "p-1", "--label", "x"},
+			[]string{"this puppet is archived", "unarchive it", "puppet limit"}},
 	}
 	for _, c := range cases {
 		app, srv := signedIn(t)

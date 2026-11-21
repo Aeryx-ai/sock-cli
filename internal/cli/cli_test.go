@@ -601,6 +601,20 @@ func TestListenStopsOnBadToken(t *testing.T) {
 	}
 }
 
+// An archived puppet's stream ends with PUPPET_ARCHIVED, and every call
+// after it fails the same way until it is unarchived: listen exits.
+func TestListenStopsOnArchivedPuppet(t *testing.T) {
+	srv := socktest.New(t)
+	srv.Streams = []socktest.StreamScript{{End: socktest.Error(connect.CodeFailedPrecondition, sockv1.ErrorReason_ERROR_REASON_PUPPET_ARCHIVED)}}
+	_, _, err := listenUntil(t, testApp(t, srv), func() bool { return false })
+	if err == nil || !strings.Contains(err.Error(), "this puppet is archived") {
+		t.Fatalf("want archived error, got %v", err)
+	}
+	if n := subscribes(srv); n != 1 {
+		t.Fatalf("subscribes %d, want 1", n)
+	}
+}
+
 // A wrong URL path is a 404, which Connect reports as Unimplemented. It
 // never fixes itself, so listen must exit instead of retrying forever.
 func TestListenStopsOnWrongURL(t *testing.T) {
@@ -773,6 +787,8 @@ func TestReconnectable(t *testing.T) {
 		{"invalid argument", connect.NewError(connect.CodeInvalidArgument, errors.New("x")), false},
 		{"unimplemented", connect.NewError(connect.CodeUnimplemented, errors.New("x")), false},
 		{"wrapped terminal", fmt.Errorf("wrap: %w", connect.NewError(connect.CodeUnauthenticated, errors.New("x"))), false},
+		{"other failed precondition", socktest.Error(connect.CodeFailedPrecondition, sockv1.ErrorReason_ERROR_REASON_LIMIT_REACHED), true},
+		{"puppet archived", socktest.Error(connect.CodeFailedPrecondition, sockv1.ErrorReason_ERROR_REASON_PUPPET_ARCHIVED), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

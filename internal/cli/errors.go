@@ -32,6 +32,7 @@ var reasonText = map[sockv1.ErrorReason]string{
 	sockv1.ErrorReason_ERROR_REASON_REGISTRATION_TICKET_INVALID: "the sign-in expired before registration finished; run sock login again",
 	sockv1.ErrorReason_ERROR_REASON_GROUP_FULL:                  "the group is full; ask for more members with sock limits request group-members <value> --reason <reason>",
 	sockv1.ErrorReason_ERROR_REASON_LIMIT_REQUEST_PENDING:       "you already have a pending request for that limit; sock limits shows it",
+	sockv1.ErrorReason_ERROR_REASON_PUPPET_ARCHIVED:             "this puppet is archived: unarchive it in the sock app first (it counts toward the puppet limit again)",
 }
 
 // afterServerText covers the reasons whose server message carries the
